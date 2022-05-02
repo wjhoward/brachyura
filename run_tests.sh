@@ -1,4 +1,4 @@
-RUST_LOG=info cargo run &
+RUST_LOG=debug cargo run &
 PID1=$(echo $!)
 echo " "
 sleep 1

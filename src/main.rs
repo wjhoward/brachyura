@@ -1,7 +1,7 @@
 use hyper::http::{HeaderValue, Uri};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Client, Method, Request, Response, Server, StatusCode};
-use log::info;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -24,6 +24,14 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
     let no_proxy = headers.contains_key("x-no-proxy");
 
     let client = Client::new();
+
+    debug!(
+        "Request method: {} host: {:?} uri: {} headers: {:?}",
+        req.method(),
+        host_header,
+        req.uri(),
+        req.headers()
+    );
 
     match (req.method(), req.uri().path(), no_proxy) {
         (&Method::GET, "/status", true) => {
@@ -61,17 +69,16 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 req.headers_mut()
                     .insert("x-no-proxy", HeaderValue::from_static("true")); // Avoid loops
 
-                let proxied_resp = client.request(req).await.unwrap();
+                response = client.request(req).await.unwrap();
                 info!(
-                    "Proxied response to: {} | Status: {}",
+                    "Proxied response from: {} | Status: {}",
                     uri,
-                    proxied_resp.status()
+                    response.status()
                 );
-
-                *response.body_mut() = proxied_resp.into_body();
             }
         }
     };
+    debug!("Response headers: {:?}", response.headers());
     Ok(response)
 }
 
