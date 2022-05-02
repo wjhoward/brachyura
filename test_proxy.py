@@ -2,7 +2,7 @@ import requests
 import unittest
 
 PROXY = "http://localhost:3000/"
-TEST_BACKEND = "localhost:8000"
+TEST_BACKEND = "test.home"
 
 class TestProxy(unittest.TestCase):
 
@@ -15,5 +15,4 @@ class TestProxy(unittest.TestCase):
         assert(r.text == "The proxy is running")
 
 if __name__ == '__main__':
-    suite = unittest.TestLoader().loadTestsFromTestCase(TestProxy)
-    unittest.TextTestRunner(verbosity=2).run(suite)
+    unittest.main(verbosity=2)

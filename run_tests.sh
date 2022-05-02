@@ -1,4 +1,3 @@
-cargo build
 RUST_LOG=info cargo run &
 PID1=$(echo $!)
 echo " "
