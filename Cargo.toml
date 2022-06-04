@@ -13,3 +13,7 @@ serde_yaml = "0.8"
 log = "0.4.0"
 env_logger = "0.8.4"
 futures = "0.3"
+axum = "0.5.4"
+axum-server = { version = "0.3", features = ["tls-rustls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,14 +1,30 @@
-use hyper::http::{HeaderValue, Uri};
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Method, Request, Response, Server, StatusCode};
+use axum::{
+    extract::Extension,
+    http::{uri::Uri, Request, Response},
+    routing::get,
+    Router,
+};
+use axum_server::tls_rustls::RustlsConfig;
+use hyper::client::HttpConnector;
+use hyper::http::HeaderValue;
+use hyper::{Body, Method, StatusCode, Version};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::env;
 use std::net::SocketAddr;
+use std::sync::Arc;
+
+type Client = hyper::client::Client<HttpConnector, Body>;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+struct Config {
+    backends: Vec<Backend>,
+    tls: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 struct Backend {
     name: Option<String>,
     location: Option<String>,
@@ -16,22 +32,39 @@ struct Backend {
     extras: HashMap<String, String>,
 }
 
-async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
+struct ProxyState {
+    config: Config,
+    client: Client,
+}
+impl ProxyState {
+    fn new(config: Config, client: Client) -> ProxyState {
+        ProxyState { config, client }
+    }
+}
+
+async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config, serde_yaml::Error> {
+    let deserialized: Config =
+        serde_yaml::from_reader(std::fs::File::open(yaml_path).expect("Unable to read config"))?;
+    Ok(deserialized)
+}
+
+async fn proxy_handler(
+    Extension(state): Extension<Arc<ProxyState>>,
+    mut req: Request<Body>,
+) -> Result<Response<Body>, Infallible> {
     let mut response = Response::new(Body::empty());
 
-    let headers = req.headers();
-    let host_header = headers.get("host").unwrap();
-    let no_proxy = headers.contains_key("x-no-proxy");
-
-    let client = Client::new();
-
     debug!(
-        "Request method: {} host: {:?} uri: {} headers: {:?}",
+        "Request version: {:?} method: {} uri: {} headers: {:?}",
+        req.version(),
         req.method(),
-        host_header,
         req.uri(),
         req.headers()
     );
+
+    let headers = req.headers();
+    let host_header = Some(headers.get("host")).unwrap_or(None);
+    let no_proxy = headers.contains_key("x-no-proxy");
 
     match (req.method(), req.uri().path(), no_proxy) {
         (&Method::GET, "/status", true) => {
@@ -39,13 +72,20 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
         }
 
         _ => {
-            let proxy_config = read_config_yaml("config.yaml".to_string())
-                .await
-                .expect("Error loading yaml config");
-            let host_header_str = host_header.to_str().expect("Unable to parse host header");
+            // Proxy the request
 
+            let host_header_str;
+            if host_header.is_none() {
+                host_header_str = "pihole.home";
+            } else {
+                host_header_str = host_header
+                    .unwrap()
+                    .to_str()
+                    .expect("Unable to parse host header");
+            }
             let mut backend_location = None;
-            for backend in proxy_config {
+
+            for backend in state.config.backends.to_vec() {
                 if backend.name.is_some() & backend.location.is_some()
                     && *host_header_str == backend.name.unwrap()
                 {
@@ -57,19 +97,33 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 *response.status_mut() = StatusCode::NOT_FOUND;
             } else {
                 // Proxy to backend
+
+                // Scheme currently hardcoded to http (given this is a TLS terminating proxy)
+                let scheme = "http";
+
                 let uri = Uri::builder()
-                    .scheme("http")
+                    .scheme(scheme)
                     .authority(backend_location.unwrap())
                     .path_and_query(req.uri().path())
                     .build()
-                    .unwrap();
+                    .expect("Unable to extract URI");
 
                 // Simply take the existing request and mutate the uri and headers
+                // TODO - handle hop by hop headers
                 *req.uri_mut() = uri.clone();
                 req.headers_mut()
                     .insert("x-no-proxy", HeaderValue::from_static("true")); // Avoid loops
 
-                response = client.request(req).await.unwrap();
+                // If the backend scheme is http, adjust the original request HTTP version to 1
+                // (It seems that the HTTP2 implementation requires TLS)
+                if scheme == "http" {
+                    *req.version_mut() = Version::HTTP_11;
+                }
+                response = state
+                    .client
+                    .request(req)
+                    .await
+                    .expect("Error making downstream request");
                 info!(
                     "Proxied response from: {} | Status: {}",
                     uri,
@@ -82,41 +136,62 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
     Ok(response)
 }
 
-async fn sigint_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C signal handler");
-}
-
-async fn read_config_yaml(yaml_path: String) -> Result<Vec<Backend>, serde_yaml::Error> {
-    let deserialized: Vec<Backend> =
-        serde_yaml::from_reader(std::fs::File::open(yaml_path).unwrap())?;
-    Ok(deserialized)
-}
-
 #[tokio::main]
 async fn main() {
     env_logger::init();
+
+    let proxy_config = read_proxy_config_yaml("config.yaml".to_string())
+        .await
+        .expect("Error loading yaml proxy config");
+
+    let client = Client::new();
+
+    let state = Arc::new(ProxyState::new(proxy_config, client));
+
+    let current_dir = env::current_dir().unwrap();
+    let tls_config = RustlsConfig::from_pem_file(
+        current_dir.join(
+            state
+                .config
+                .tls
+                .get("cert_path")
+                .expect("Unable to read cert_path"),
+        ),
+        current_dir.join(
+            state
+                .config
+                .tls
+                .get("key_path")
+                .expect("Unable to read key_path"),
+        ),
+    )
+    .await
+    .expect("TLS config error");
+
+    let app = Router::new()
+        .route("/*path", get(proxy_handler))
+        .layer(Extension(state));
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-
-    let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(proxy)) });
-
-    let server = Server::bind(&addr).serve(make_svc);
-
-    let graceful = server.with_graceful_shutdown(sigint_signal());
-
-    if let Err(e) = graceful.await {
-        eprintln!("Server error: {}", e);
-    }
+    info!("Reverse proxy listening on {}", addr);
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service())
+        .await
+        .expect("Error starting axum server");
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::read_config_yaml;
+    use crate::read_proxy_config_yaml;
 
     #[tokio::test]
     async fn test_read_config_yaml() {
-        let data = read_config_yaml("config.yaml".to_string()).await.unwrap();
-        assert_eq!(data[0].name.as_ref().unwrap(), &String::from("test.home"));
+        let data = read_proxy_config_yaml("config.yaml".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            data.backends[0].name.as_ref().unwrap(),
+            &String::from("test.home")
+        );
     }
 }
