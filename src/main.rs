@@ -1,3 +1,4 @@
+use anyhow::{Error, Result};
 use axum::{
     extract::Extension,
     http::{uri::Uri, Request, Response},
@@ -17,6 +18,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 type Client = hyper::client::Client<HttpConnector, Body>;
+
+const HOP_BY_HOP_HEADERS: [&str; 8] = [
+    "Keep-Alive",
+    "Transfer-Encoding",
+    "TE",
+    "Connection",
+    "Trailer",
+    "Upgrade",
+    "Proxy-Authorization",
+    "Proxy-Authenticate",
+];
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Config {
@@ -46,6 +58,21 @@ async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config, serde_yaml:
     let deserialized: Config =
         serde_yaml::from_reader(std::fs::File::open(yaml_path).expect("Unable to read config"))?;
     Ok(deserialized)
+}
+
+async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
+    // Adjust headers for a request which is being proxied downstream
+
+    // Remove hop by hop headers
+    for h in HOP_BY_HOP_HEADERS {
+        req.headers_mut().remove(h);
+    }
+
+    // Append a no-proxy header to avoid loops
+    req.headers_mut()
+        .insert("x-no-proxy", HeaderValue::from_static("true"));
+
+    Ok(())
 }
 
 async fn proxy_handler(
@@ -109,10 +136,10 @@ async fn proxy_handler(
                     .expect("Unable to extract URI");
 
                 // Simply take the existing request and mutate the uri and headers
-                // TODO - handle hop by hop headers
                 *req.uri_mut() = uri.clone();
-                req.headers_mut()
-                    .insert("x-no-proxy", HeaderValue::from_static("true")); // Avoid loops
+                adjust_proxied_headers(&mut req)
+                    .await
+                    .expect("Unable to adjust headers");
 
                 // If the backend scheme is http, adjust the original request HTTP version to 1
                 // (It seems that the HTTP2 implementation requires TLS)
@@ -182,6 +209,12 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    use hyper::{
+        header::{HOST, PROXY_AUTHENTICATE},
+        Body, Request,
+    };
+
+    use crate::adjust_proxied_headers;
     use crate::read_proxy_config_yaml;
 
     #[tokio::test]
@@ -193,5 +226,17 @@ mod tests {
             data.backends[0].name.as_ref().unwrap(),
             &String::from("test.home")
         );
+    }
+
+    #[tokio::test]
+    async fn test_adjust_proxied_headers() {
+        let mut req = Request::new(Body::from("test"));
+        req.headers_mut().insert(HOST, "test_host".parse().unwrap());
+        req.headers_mut()
+            .insert(PROXY_AUTHENTICATE, "true".parse().unwrap());
+        adjust_proxied_headers(&mut req).await.unwrap();
+        assert!(req.headers().iter().count() == 2);
+        assert!(req.headers().contains_key(HOST));
+        assert!(req.headers().contains_key("x-no-proxy"));
     }
 }
