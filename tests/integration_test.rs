@@ -21,9 +21,10 @@ async fn end_to_end_test() {
         .await;
 
     // Run the proxy server in a separate thread
-    let addr = SocketAddr::from(([127, 0, 0, 1], 4000));
     tokio::spawn(async move {
-        run_server(addr).await;
+        let config_path = String::from("./tests/config.yaml");
+        let addr = SocketAddr::from(([127, 0, 0, 1], 4000));
+        run_server(addr, config_path).await;
     });
 
     // Sleep this thread while the server starts up

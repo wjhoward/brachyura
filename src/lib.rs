@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use env_logger::Env;
 use hyper::client::HttpConnector;
 use hyper::http::HeaderValue;
 use hyper::{Body, Method, StatusCode, Version};
@@ -163,10 +164,10 @@ async fn proxy_handler(
     Ok(response)
 }
 
-pub async fn run_server(addr: SocketAddr) {
-    env_logger::init();
+pub async fn run_server(addr: SocketAddr, config_path: String) {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    let proxy_config = read_proxy_config_yaml("config.yaml".to_string())
+    let proxy_config = read_proxy_config_yaml(config_path)
         .await
         .expect("Error loading yaml proxy config");
 

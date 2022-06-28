@@ -1,16 +1,34 @@
 # Brachyura 
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 
-A reverse proxy, which I am primarily using as a Rust / Hyper learning project.
+A reverse proxy, which I am primarily using as a Rust learning project.
 
 I utilize Nginx as part of my home lab providing reverse proxy functionality as well as TLS termination. The idea of this project is to replace Nginx with a light weight Rust based reverse proxy.
 
+---
+## Configuration
+
+### Proxy backend config
+
+The proxy uses the host header to decide where to send the request, and this is configured in the yaml config file under "backends". The host header needs to match the name value, then the request is proxied to the location. For example:
+
+    backends:
+      - name: "test.home"
+        location: "127.0.0.1:8000"
+
+A request with the host header `test.home` would be proxied to `127.0.0.1:8000`
+
+### TLS config
+The key and cert paths are also defined in the yaml file. Only the connection between the client and proxy is encrypted.
+
+---
+
 ## Testing / Running
 
-The request is proxied to the host included in the host header.
+A TLS key and cert is required at the configured relative path.
 
-#### For example:
+Can be tested using curl, e.g:
 
-`curl -v -H "host: localhost:5000" http://localhost:3000/test-path`
+`curl -H "host: test.home"  https://localhost:4000/`
 
-Would proxy the request to: `http://localhost:5000/test-path`
+Which based on the example config would proxy the request to: `http://127.0.0.1:8000/`
