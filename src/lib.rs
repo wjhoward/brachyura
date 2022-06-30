@@ -33,8 +33,15 @@ const HOP_BY_HOP_HEADERS: [&str; 8] = [
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Config {
-    backends: Vec<Backend>,
+    listen: Listen,
     tls: HashMap<String, String>,
+    backends: Vec<Backend>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct Listen {
+    address: [u8; 4],
+    port: u16,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -164,16 +171,18 @@ async fn proxy_handler(
     Ok(response)
 }
 
-pub async fn run_server(addr: SocketAddr, config_path: String) {
+pub async fn run_server(config_path: String) {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    let proxy_config = read_proxy_config_yaml(config_path)
+    let config = read_proxy_config_yaml(config_path)
         .await
         .expect("Error loading yaml proxy config");
 
+    let listen_address = SocketAddr::from((config.listen.address, config.listen.port));
+
     let client = Client::new();
 
-    let state = Arc::new(ProxyState::new(proxy_config, client));
+    let state = Arc::new(ProxyState::new(config, client));
 
     let current_dir = env::current_dir().unwrap();
     let tls_config = RustlsConfig::from_pem_file(
@@ -199,8 +208,9 @@ pub async fn run_server(addr: SocketAddr, config_path: String) {
         .route("/*path", get(proxy_handler))
         .layer(Extension(state));
 
-    info!("Reverse proxy listening on {}", addr);
-    axum_server::bind_rustls(addr, tls_config)
+    info!("Reverse proxy listening on {}", listen_address);
+
+    axum_server::bind_rustls(listen_address, tls_config)
         .serve(app.into_make_service())
         .await
         .expect("Error starting axum server");

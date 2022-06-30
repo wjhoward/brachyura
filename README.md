@@ -7,6 +7,10 @@ I utilize Nginx as part of my home lab providing reverse proxy functionality as 
 
 ---
 ## Configuration
+Configured in `config.yaml`
+
+### TLS config
+The key and cert paths are also defined in the yaml file. Only the connection between the client and proxy is encrypted.
 
 ### Proxy backend config
 
@@ -17,9 +21,6 @@ The proxy uses the host header to decide where to send the request, and this is 
         location: "127.0.0.1:8000"
 
 A request with the host header `test.home` would be proxied to `127.0.0.1:8000`
-
-### TLS config
-The key and cert paths are also defined in the yaml file. Only the connection between the client and proxy is encrypted.
 
 ---
 

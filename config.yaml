@@ -1,3 +1,11 @@
+listen:
+  address: [127, 0, 0, 1]
+  port: 4000
+
+tls:
+  key_path: "certs/key"
+  cert_path: "certs/cert.crt"
+
 backends:
   - name: "test.home"
     location: "127.0.0.1:8000"
@@ -5,7 +13,3 @@ backends:
     location: "127.0.0.1:8000"
   - name: "pihole.home"
     location: "192.168.1.250"
-
-tls:
-  key_path: "certs/key"
-  cert_path: "certs/cert.crt"
