@@ -1,7 +1,11 @@
-backends:
-  - name: "test.home"
-    location: "127.0.0.1:8000"
+listen:
+  address: [127, 0, 0, 1]
+  port: 4000
 
 tls:
   key_path: "certs/key"
   cert_path: "certs/cert.crt"
+
+backends:
+  - name: "test.home"
+    location: "127.0.0.1:8000"

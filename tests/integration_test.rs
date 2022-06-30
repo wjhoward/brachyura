@@ -1,5 +1,4 @@
 use hyper::header::HOST;
-use std::net::SocketAddr;
 use std::{thread, time};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -11,8 +10,8 @@ async fn end_to_end_test() {
     // Setup the mock server
     let listener = std::net::TcpListener::bind("127.0.0.1:8000").unwrap();
     let mock_server = MockServer::builder().listener(listener).start().await;
-
-    let template = ResponseTemplate::new(200).set_body_raw("This is the mock server", "text/plain");
+    let body = "This is the mock server!";
+    let template = ResponseTemplate::new(200).set_body_raw(body, "text/plain");
 
     Mock::given(method("GET"))
         .and(path("/test"))
@@ -23,8 +22,7 @@ async fn end_to_end_test() {
     // Run the proxy server in a separate thread
     tokio::spawn(async move {
         let config_path = String::from("./tests/config.yaml");
-        let addr = SocketAddr::from(([127, 0, 0, 1], 4000));
-        run_server(addr, config_path).await;
+        run_server(config_path).await;
     });
 
     // Sleep this thread while the server starts up
@@ -41,8 +39,5 @@ async fn end_to_end_test() {
         .await;
 
     // Check that the response received from the proxy is from the mock server
-    assert_eq!(
-        resp.unwrap().text().await.unwrap(),
-        "This is the mock server"
-    )
+    assert_eq!(resp.unwrap().text().await.unwrap(), body)
 }
