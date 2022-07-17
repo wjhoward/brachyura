@@ -8,7 +8,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
 use hyper::client::HttpConnector;
-use hyper::http::HeaderValue;
+use hyper::http::{header, header::HeaderName, HeaderValue};
 use hyper::{Body, Method, StatusCode, Version};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
@@ -20,15 +20,16 @@ use std::sync::Arc;
 
 type Client = hyper::client::Client<HttpConnector, Body>;
 
-const HOP_BY_HOP_HEADERS: [&str; 8] = [
-    "Keep-Alive",
-    "Transfer-Encoding",
-    "TE",
-    "Connection",
-    "Trailer",
-    "Upgrade",
-    "Proxy-Authorization",
-    "Proxy-Authenticate",
+#[allow(clippy::declare_interior_mutable_const)]
+const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
+    HeaderName::from_static("keep-alive"),
+    header::TRANSFER_ENCODING,
+    header::TE,
+    header::CONNECTION,
+    header::TRAILER,
+    header::UPGRADE,
+    header::PROXY_AUTHORIZATION,
+    header::PROXY_AUTHENTICATE,
 ];
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
