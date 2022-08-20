@@ -1,7 +1,7 @@
 # Brachyura 
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 
-A TLS terminating reverse proxy, which I am primarily using as a Rust learning project.
+A TLS terminating reverse proxy, which I am primarily using as a Rust learning project. **Currently a work in progress.**
 
 I utilize Nginx as part of my home lab providing reverse proxy functionality as well as TLS termination. The idea of this project is to replace Nginx with a light weight Rust based reverse proxy. Configurable via a yaml config file.
 
@@ -29,10 +29,9 @@ A request with the host header `test.home` would be proxied to `127.0.0.1:8000`
 
 ## Testing / Running
 
-A TLS key and cert is required at the configured relative path.
+### Library tests
+To run the library / unit tests run: `cargo test --lib`
 
-Can be tested using curl, e.g:
+### Full tests
 
-`curl -H "host: test.home"  https://localhost:4000/`
-
-Which based on the example config would proxy the request to: `http://127.0.0.1:8000/`
+The full test suite (`cargo test`) requires a TLS key and cert configured and existing at the relative path.
