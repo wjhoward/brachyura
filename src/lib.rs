@@ -110,18 +110,20 @@ async fn proxy_handler(
         _ => {
             // Proxy the request
 
-            let host_header_str;
+            // Cannot proxy without a host header
             if host_header.is_none() {
-                host_header_str = "pihole.home";
-            } else {
-                host_header_str = host_header
-                    .unwrap()
-                    .to_str()
-                    .expect("Unable to parse host header");
+                *response.body_mut() = Body::from("No host header set");
+                *response.status_mut() = StatusCode::NOT_FOUND;
+                return Ok(response);
             }
+
+            let host_header_str = host_header
+                .unwrap()
+                .to_str()
+                .expect("Unable to parse host header");
             let mut backend_location = None;
 
-            for backend in state.config.backends.to_vec() {
+            for backend in state.config.backends.iter().cloned() {
                 if backend.name.is_some() & backend.location.is_some()
                     && *host_header_str == backend.name.unwrap()
                 {
