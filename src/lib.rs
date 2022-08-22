@@ -84,6 +84,33 @@ async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
     Ok(())
 }
 
+fn host_header_match_proxy_address(host_header: String, proxy_listener: &Listen) -> bool {
+    // This function checks whether the host header matches the proxy_listen address
+    // Used for checking whether the host header was not set for HTTP1 requests
+    // as it defaults to the request destination address
+
+    // Build a listener address string, e.g. 127.0.0.1:4000
+    let listen_ip = proxy_listener.address.to_ascii_lowercase();
+    let listen_port = proxy_listener.port.to_string();
+    let mut listen_ip_joined: String = listen_ip.iter().map(|&ip| ip.to_string() + ".").collect();
+    listen_ip_joined.pop(); // remove trailing .
+    let listener_address = listen_ip_joined + ":" + &listen_port[..];
+
+    // Convert the host header into a listener address string equivalent
+    let host_header_split: Vec<&str> = host_header.split(':').collect();
+
+    if host_header_split.len() == 1 {
+        // If len is 1, then this isn't a host:IP, return early false
+        return false;
+    }
+    let host_header_ip_port = match host_header_split[0] {
+        "localhost" => "127.0.0.1".to_string() + ":" + host_header_split[1],
+        _ => host_header_split[0].to_string() + ":" + host_header_split[1],
+    };
+
+    host_header_ip_port == listener_address
+}
+
 async fn proxy_handler(
     Extension(state): Extension<Arc<ProxyState>>,
     mut req: Request<Body>,
@@ -98,29 +125,50 @@ async fn proxy_handler(
         req.headers()
     );
 
+    // Currently only testing HTTP1 support
+    match req.version() {
+        Version::HTTP_2 => {
+            panic!("HTTP2 unsupported version")
+        }
+        Version::HTTP_3 => {
+            panic!("HTTP3 unsupported version")
+        }
+        _ => {}
+    }
+
     let headers = req.headers();
     let host_header = Some(headers.get("host")).unwrap_or(None);
     let no_proxy = headers.contains_key("x-no-proxy");
+    let host_header_str = host_header
+        .unwrap()
+        .to_str()
+        .expect("Unable to parse host header");
 
-    match (req.method(), req.uri().path(), no_proxy) {
-        (&Method::GET, "/status", true) => {
+    let host_match_proxy_address =
+        host_header_match_proxy_address(String::from(host_header_str), &state.config.listen);
+
+    match (
+        req.method(),
+        req.uri().path(),
+        no_proxy,
+        host_match_proxy_address,
+    ) {
+        // Proxy internal status endpoint
+        (&Method::GET, "/status", true, true) => {
             *response.body_mut() = Body::from("The proxy is running");
         }
 
+        // A non internal request, but the host header has not been defined
+        (_, _, false, true) => {
+            info!("Host header not defined");
+            *response.body_mut() = Body::from("Host header not defined");
+            *response.status_mut() = StatusCode::NOT_FOUND;
+        }
+
+        // Proxy the request
         _ => {
-            // Proxy the request
+            info!("Standard request proxy");
 
-            // Cannot proxy without a host header
-            if host_header.is_none() {
-                *response.body_mut() = Body::from("No host header set");
-                *response.status_mut() = StatusCode::NOT_FOUND;
-                return Ok(response);
-            }
-
-            let host_header_str = host_header
-                .unwrap()
-                .to_str()
-                .expect("Unable to parse host header");
             let mut backend_location = None;
 
             for backend in state.config.backends.iter().cloned() {
@@ -226,8 +274,9 @@ mod tests {
         Body, Request,
     };
 
-    use crate::adjust_proxied_headers;
+    use crate::host_header_match_proxy_address;
     use crate::read_proxy_config_yaml;
+    use crate::{adjust_proxied_headers, Listen};
 
     #[tokio::test]
     async fn test_read_config_yaml() {
@@ -250,5 +299,26 @@ mod tests {
         assert!(req.headers().iter().count() == 2);
         assert!(req.headers().contains_key(HOST));
         assert!(req.headers().contains_key("x-no-proxy"));
+    }
+
+    #[tokio::test]
+    async fn test_host_header_match_proxy_address() {
+        // Should match
+        let listen = Listen {
+            address: [127, 0, 0, 1],
+            port: 4000,
+        };
+        let host_header_string = String::from("localhost:4000");
+        let test_match = host_header_match_proxy_address(host_header_string, &listen);
+        assert_eq!(test_match, true);
+
+        // Shouldn't match
+        let host_header_string = String::from("localhost:4000");
+        let listen = Listen {
+            address: [127, 0, 0, 2],
+            port: 4000,
+        };
+        let test_match = host_header_match_proxy_address(host_header_string, &listen);
+        assert_eq!(test_match, false);
     }
 }

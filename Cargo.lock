@@ -169,6 +169,7 @@ dependencies = [
  "futures",
  "http",
  "hyper",
+ "lazy_static",
  "log",
  "reqwest",
  "serde",

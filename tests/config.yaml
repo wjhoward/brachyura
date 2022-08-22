@@ -3,8 +3,8 @@ listen:
   port: 4000
 
 tls:
-  key_path: "certs/key"
-  cert_path: "certs/cert.crt"
+  key_path: "../certs/key"
+  cert_path: "../certs/cert.crt"
 
 backends:
   - name: "test.home"
