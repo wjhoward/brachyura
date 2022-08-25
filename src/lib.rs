@@ -127,13 +127,13 @@ async fn proxy_handler(
 
     // Currently only testing HTTP1 support
     match req.version() {
-        Version::HTTP_2 => {
-            panic!("HTTP2 unsupported version")
+        Version::HTTP_10 | Version::HTTP_11 => {}
+        _ => {
+            *response.body_mut() =
+                Body::from(format!("Unsupported HTTP version: {:?}", req.version()));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return Ok(response);
         }
-        Version::HTTP_3 => {
-            panic!("HTTP3 unsupported version")
-        }
-        _ => {}
     }
 
     let headers = req.headers();

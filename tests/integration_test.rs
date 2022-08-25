@@ -1,7 +1,8 @@
 use hyper::header::HOST;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
+use reqwest::{Error, Response};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::{thread, time};
 use wiremock::matchers::{method, path};
@@ -18,54 +19,73 @@ impl MockBackend {
     }
 
     pub async fn init(&mut self) {
-        let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
-        let mock_server = MockServer::builder().listener(listener).start().await;
-        let template =
-            ResponseTemplate::new(200).set_body_raw("This is the mock backend!", "text/plain");
+        if self.mock_server.is_none() {
+            let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
+            let mock_server = MockServer::builder().listener(listener).start().await;
+            let template =
+                ResponseTemplate::new(200).set_body_raw("This is the mock backend!", "text/plain");
 
-        Mock::given(method("GET"))
-            .and(path("/test"))
-            .respond_with(template)
-            .mount(&mock_server)
-            .await;
-        self.mock_server = Some(mock_server);
+            Mock::given(method("GET"))
+                .and(path("/test"))
+                .respond_with(template)
+                .mount(&mock_server)
+                .await;
+            self.mock_server = Some(mock_server);
+        }
     }
 }
 
-lazy_static! {
-    pub static ref MOCK_BACKEND: Mutex<MockBackend> = Mutex::new(MockBackend::new());
-    pub static ref PROXY_STARTED: AtomicBool = AtomicBool::new(false);
-}
+static MOCK_BACKEND: Lazy<Mutex<MockBackend>> = Lazy::new(|| Mutex::new(MockBackend::new()));
 
-async fn mock_backend_init() {
-    // Initialize the mock backend
-    // First check we've not already done this
-    if MOCK_BACKEND.lock().unwrap().mock_server.is_none() {
-        MOCK_BACKEND.lock().unwrap().init().await;
+static PROXY_STARTED: AtomicBool = AtomicBool::new(false);
+static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn finish(proxy_parent: bool) {
+    TEST_COUNTER.fetch_sub(1, Ordering::SeqCst);
+    let mut limit = 0; // Prevents an infinite loop if a test thread panics
+    if proxy_parent {
+        // If dependent tests are still running wait
+        while TEST_COUNTER.load(Ordering::SeqCst) != 0 {
+            if limit > 25 {
+                break;
+            }
+            thread::sleep(time::Duration::from_millis(100));
+            limit += 1;
+        }
     }
 }
 
-fn start_proxy() {
-    // Assuming we've not already started it
+fn start_proxy() -> bool {
+    // Track the number of dependant tests, plus the parent thread
+    TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let mut parent = true;
+
     if !PROXY_STARTED.load(Ordering::Relaxed) {
         PROXY_STARTED.store(true, Ordering::Relaxed);
         tokio::spawn(async move {
             let config_path = String::from("./tests/config.yaml");
             run_server(config_path).await;
+            true
         });
-        // Sleep so that the thread that starts the proxy server should
-        // last longer than the other test threads, otherwise if the proxy server
-        // parent thread finishes before the other tests run, the proxy server thread
-        // is terminated
-        // Must be a better way to solve this...
-        thread::sleep(time::Duration::from_millis(1000));
+    } else {
+        // Proxy already running, not started by this thread
+        parent = false;
     }
+    parent
+}
+
+async fn assert_response(resp: Result<Response, Error>, expected_status: u16, expected_body: &str) {
+    let response = resp.unwrap();
+    let status = response.status();
+    let body = response.bytes().await.unwrap();
+    assert_eq!(status, expected_status);
+    assert_eq!(body, expected_body);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_test() {
-    mock_backend_init().await;
-    start_proxy();
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy();
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -81,18 +101,16 @@ async fn http1_test() {
         .send()
         .await;
 
-    // In this case the response should be from the mock backend
-    let response = resp.unwrap();
-    let status = response.status();
-    let body = response.bytes().await.unwrap();
-    assert_eq!(status, 200);
-    assert_eq!(body, "This is the mock backend!");
+    // In this case the response should be a 200 from the mock backend
+    assert_response(resp, 200, "This is the mock backend!").await;
+
+    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_no_host_header_test() {
-    mock_backend_init().await;
-    start_proxy();
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy();
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -108,17 +126,15 @@ async fn http1_no_host_header_test() {
         .await;
 
     // In this case the proxy should respond with a 404
-    let response = resp.unwrap();
-    let status = response.status();
-    let body = response.bytes().await.unwrap();
-    assert_eq!(status, 404);
-    assert_eq!(body, "Host header not defined");
+    assert_response(resp, 404, "Host header not defined").await;
+
+    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_no_proxy_header_status() {
-    mock_backend_init().await;
-    start_proxy();
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy();
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -135,18 +151,15 @@ async fn http1_no_proxy_header_status() {
         .await;
 
     // In this case the proxy should respond with a 200
-    let response = resp.unwrap();
-    let status = response.status();
-    let body = response.bytes().await.unwrap();
-    assert_eq!(status, 200);
-    assert_eq!(body, "The proxy is running");
+    assert_response(resp, 200, "The proxy is running").await;
+
+    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[should_panic]
 async fn http1_only_test() {
-    mock_backend_init().await;
-    start_proxy();
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy();
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -162,7 +175,10 @@ async fn http1_only_test() {
         .send()
         .await;
 
-    let _ = resp.unwrap();
+    // In this case the proxy should respond with a 400
+    assert_response(resp, 400, "Unsupported HTTP version: HTTP/2.0").await;
+
+    finish(proxy_parent);
 }
 
 // TODO
