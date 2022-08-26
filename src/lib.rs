@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
 
 type Client = hyper::client::Client<HttpConnector, Body>;
@@ -78,24 +78,21 @@ async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
     Ok(())
 }
 
-fn host_header_match_proxy_address(host_header: String, proxy_listener: &SocketAddrV4) -> bool {
+fn host_header_match_proxy_address(
+    host_header: String,
+    proxy_listener: SocketAddrV4,
+) -> Result<bool, Error> {
     // This function checks whether the host header matches the proxy_listen address
     // Used for checking whether the host header was not set for HTTP1 requests
     // as it defaults to the request destination address
 
-    // Convert the host header into a listener address string equivalent
-    let host_header_split: Vec<&str> = host_header.split(':').collect();
+    let host_header_to_socket = host_header.to_socket_addrs();
+    let host_header_ip_port = host_header_to_socket?
+        .next()
+        .expect("Unable to parse header as socket address");
 
-    if host_header_split.len() == 1 {
-        // If len is 1, then this isn't a host:IP, return early false
-        return false;
-    }
-    let host_header_ip_port = match host_header_split[0] {
-        "localhost" => "127.0.0.1".to_string() + ":" + host_header_split[1],
-        _ => host_header_split[0].to_string() + ":" + host_header_split[1],
-    };
-
-    host_header_ip_port == proxy_listener.to_string()
+    let listen_address = SocketAddr::from(proxy_listener);
+    Ok(host_header_ip_port == listen_address)
 }
 
 async fn proxy_handler(
@@ -132,13 +129,13 @@ async fn proxy_handler(
         .expect("Unable to parse host header");
 
     let host_match_proxy_address =
-        host_header_match_proxy_address(String::from(host_header_str), &state.config.listen);
+        host_header_match_proxy_address(String::from(host_header_str), state.config.listen);
 
     match (
         req.method(),
         req.uri().path(),
         no_proxy,
-        host_match_proxy_address,
+        host_match_proxy_address.unwrap_or_default(),
     ) {
         // Proxy internal status endpoint
         (&Method::GET, "/status", true, true) => {
@@ -294,13 +291,19 @@ mod tests {
         // Should match
         let listen = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4000);
         let host_header_string = String::from("localhost:4000");
-        let test_match = host_header_match_proxy_address(host_header_string, &listen);
-        assert_eq!(test_match, true);
+        let test_match = host_header_match_proxy_address(host_header_string, listen);
+        assert_eq!(test_match.unwrap(), true);
 
         // Shouldn't match
         let host_header_string = String::from("localhost:4000");
         let listen = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 2), 4000);
-        let test_match = host_header_match_proxy_address(host_header_string, &listen);
-        assert_eq!(test_match, false);
+        let test_match = host_header_match_proxy_address(host_header_string, listen);
+        assert_eq!(test_match.unwrap(), false);
+
+        // Failure case
+        let host_header_string = String::from("test.home");
+        let listen = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 2), 4000);
+        let test_match = host_header_match_proxy_address(host_header_string, listen);
+        assert_eq!(test_match.unwrap_or_default(), false);
     }
 }

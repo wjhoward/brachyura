@@ -2,7 +2,7 @@ use hyper::header::HOST;
 use once_cell::sync::Lazy;
 use reqwest::{Error, Response};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::{thread, time};
 use wiremock::matchers::{method, path};
@@ -36,8 +36,7 @@ impl MockBackend {
 }
 
 static MOCK_BACKEND: Lazy<Mutex<MockBackend>> = Lazy::new(|| Mutex::new(MockBackend::new()));
-
-static PROXY_STARTED: AtomicBool = AtomicBool::new(false);
+static PROXY_STARTED: Mutex<bool> = Mutex::new(false);
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn finish(proxy_parent: bool) {
@@ -58,14 +57,17 @@ fn finish(proxy_parent: bool) {
 fn start_proxy() -> bool {
     // Track the number of dependant tests, plus the parent thread
     TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let mut parent = true;
+    let parent;
 
-    if !PROXY_STARTED.load(Ordering::Relaxed) {
-        PROXY_STARTED.store(true, Ordering::Relaxed);
+    // Get the mutex guard/lock until proxy_started goes out of scope
+    let mut proxy_started = PROXY_STARTED.lock().unwrap();
+
+    if !*proxy_started {
+        parent = true;
+        *proxy_started = true;
         tokio::spawn(async move {
             let config_path = String::from("./tests/config.yaml");
             run_server(config_path).await;
-            true
         });
     } else {
         // Proxy already running, not started by this thread
