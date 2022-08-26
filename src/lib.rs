@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
 type Client = hyper::client::Client<HttpConnector, Body>;
@@ -34,15 +34,9 @@ const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Config {
-    listen: Listen,
+    listen: SocketAddrV4,
     tls: HashMap<String, String>,
     backends: Vec<Backend>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-struct Listen {
-    address: [u8; 4],
-    port: u16,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -84,17 +78,10 @@ async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
     Ok(())
 }
 
-fn host_header_match_proxy_address(host_header: String, proxy_listener: &Listen) -> bool {
+fn host_header_match_proxy_address(host_header: String, proxy_listener: &SocketAddrV4) -> bool {
     // This function checks whether the host header matches the proxy_listen address
     // Used for checking whether the host header was not set for HTTP1 requests
     // as it defaults to the request destination address
-
-    // Build a listener address string, e.g. 127.0.0.1:4000
-    let listen_ip = proxy_listener.address.to_ascii_lowercase();
-    let listen_port = proxy_listener.port.to_string();
-    let mut listen_ip_joined: String = listen_ip.iter().map(|&ip| ip.to_string() + ".").collect();
-    listen_ip_joined.pop(); // remove trailing .
-    let listener_address = listen_ip_joined + ":" + &listen_port[..];
 
     // Convert the host header into a listener address string equivalent
     let host_header_split: Vec<&str> = host_header.split(':').collect();
@@ -108,7 +95,7 @@ fn host_header_match_proxy_address(host_header: String, proxy_listener: &Listen)
         _ => host_header_split[0].to_string() + ":" + host_header_split[1],
     };
 
-    host_header_ip_port == listener_address
+    host_header_ip_port == proxy_listener.to_string()
 }
 
 async fn proxy_handler(
@@ -229,7 +216,7 @@ pub async fn run_server(config_path: String) {
         .await
         .expect("Error loading yaml proxy config");
 
-    let listen_address = SocketAddr::from((config.listen.address, config.listen.port));
+    let listen_address = SocketAddr::from(config.listen);
 
     let client = Client::new();
 
@@ -273,10 +260,11 @@ mod tests {
         header::{HOST, PROXY_AUTHENTICATE},
         Body, Request,
     };
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
+    use crate::adjust_proxied_headers;
     use crate::host_header_match_proxy_address;
     use crate::read_proxy_config_yaml;
-    use crate::{adjust_proxied_headers, Listen};
 
     #[tokio::test]
     async fn test_read_config_yaml() {
@@ -304,20 +292,14 @@ mod tests {
     #[tokio::test]
     async fn test_host_header_match_proxy_address() {
         // Should match
-        let listen = Listen {
-            address: [127, 0, 0, 1],
-            port: 4000,
-        };
+        let listen = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 4000);
         let host_header_string = String::from("localhost:4000");
         let test_match = host_header_match_proxy_address(host_header_string, &listen);
         assert_eq!(test_match, true);
 
         // Shouldn't match
         let host_header_string = String::from("localhost:4000");
-        let listen = Listen {
-            address: [127, 0, 0, 2],
-            port: 4000,
-        };
+        let listen = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 2), 4000);
         let test_match = host_header_match_proxy_address(host_header_string, &listen);
         assert_eq!(test_match, false);
     }
