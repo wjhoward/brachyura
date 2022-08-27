@@ -23,4 +23,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wiremock = "0.5"
 http = "0.2.8"
 reqwest = "0.11.11"
-once_cell = "1.13.1"

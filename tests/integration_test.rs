@@ -1,5 +1,4 @@
 use hyper::header::HOST;
-use once_cell::sync::Lazy;
 use reqwest::{Error, Response};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,7 +13,7 @@ pub struct MockBackend {
 }
 
 impl MockBackend {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { mock_server: None }
     }
 
@@ -35,7 +34,7 @@ impl MockBackend {
     }
 }
 
-static MOCK_BACKEND: Lazy<Mutex<MockBackend>> = Lazy::new(|| Mutex::new(MockBackend::new()));
+static MOCK_BACKEND: Mutex<MockBackend> = Mutex::new(MockBackend::new());
 static PROXY_STARTED: Mutex<bool> = Mutex::new(false);
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

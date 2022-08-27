@@ -170,7 +170,6 @@ dependencies = [
  "http",
  "hyper",
  "log",
- "once_cell",
  "reqwest",
  "serde",
  "serde_yaml",
