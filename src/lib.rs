@@ -78,10 +78,42 @@ async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
     Ok(())
 }
 
+fn get_host_header(req: &Request<Body>) -> Result<&str, Error> {
+    match req.version() {
+        Version::HTTP_09 | Version::HTTP_10 | Version::HTTP_11 => Ok(req
+            .headers()
+            .get("host")
+            .ok_or_else(|| {
+                anyhow::Error::msg(format!(
+                    "Unable to parse host header, version: {:?}",
+                    req.version()
+                ))
+            })?
+            .to_str()?),
+        _ => Ok(req
+            .uri()
+            .authority()
+            .ok_or_else(|| {
+                anyhow::Error::msg(format!(
+                    "Unable to parse host header, version: {:?}",
+                    req.version()
+                ))
+            })
+            .unwrap()
+            .as_ref()),
+    }
+}
+
 fn host_header_set(host_header: String) -> bool {
     // For HTTP1, If the host header is not an IP address
     // we can probably assume its been set manually
     host_header.to_socket_addrs().is_err()
+}
+
+fn bad_request_handler(mut response: Response<Body>, message: String) -> Response<Body> {
+    *response.body_mut() = Body::from(message);
+    *response.status_mut() = StatusCode::BAD_REQUEST;
+    response
 }
 
 async fn proxy_handler(
@@ -98,25 +130,30 @@ async fn proxy_handler(
         req.headers()
     );
 
-    // Currently only testing HTTP1 support
+    // Currently only testing HTTP1/2 support
     match req.version() {
-        Version::HTTP_10 | Version::HTTP_11 => {}
+        Version::HTTP_10 | Version::HTTP_11 | Version::HTTP_2 => {}
         _ => {
-            *response.body_mut() =
-                Body::from(format!("Unsupported HTTP version: {:?}", req.version()));
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            return Ok(response);
+            return Ok(bad_request_handler(
+                response,
+                format!("Unsupported HTTP version: {:?}", req.version()),
+            ))
         }
     }
 
-    let headers = req.headers();
-    let host_header = Some(headers.get("host")).unwrap_or(None);
-    let no_proxy = headers.contains_key("x-no-proxy");
-    let host_header_str = host_header
-        .unwrap()
-        .to_str()
-        .expect("Unable to parse host header");
+    // Extract the host header
+    let host_header_str = match get_host_header(&req) {
+        Ok(host_header_str) => host_header_str,
+        Err(e) => {
+            return Ok(bad_request_handler(
+                response,
+                format!("Unable to parse host header: {:?}", e),
+            ))
+        }
+    };
     let host_header_set = host_header_set(host_header_str.to_string());
+
+    let no_proxy = req.headers().contains_key("x-no-proxy");
 
     match (req.method(), req.uri().path(), no_proxy, host_header_set) {
         // Proxy internal status endpoint
@@ -139,7 +176,7 @@ async fn proxy_handler(
 
             for backend in state.config.backends.iter().cloned() {
                 if backend.name.is_some() & backend.location.is_some()
-                    && *host_header_str == backend.name.unwrap()
+                    && *host_header_str == backend.name.expect("backend.name config error")
                 {
                     backend_location = backend.location;
                     break;
@@ -240,9 +277,7 @@ mod tests {
         Body, Request,
     };
 
-    use crate::adjust_proxied_headers;
-    use crate::host_header_set;
-    use crate::read_proxy_config_yaml;
+    use super::*;
 
     #[tokio::test]
     async fn test_read_config_yaml() {
@@ -290,5 +325,20 @@ mod tests {
         let host_header_string = String::from("test.home");
         let test_match = host_header_set(host_header_string);
         assert_eq!(test_match, true);
+    }
+    #[tokio::test]
+    async fn test_get_host_header() {
+        // HTTP 1
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_10)
+            .uri("https://localhost:4000/test")
+            .header(HOST, "test.home")
+            .body(Body::from("test"))
+            .unwrap();
+        let host_header = get_host_header(&request);
+        assert_eq!(host_header.unwrap(), "test.home");
+
+        //TODO Test and HTTP2 request
     }
 }
