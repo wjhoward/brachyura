@@ -7,7 +7,7 @@ tls:
 backends:
   - name: "test.home"
     location: "127.0.0.1:8000"
-  - name: "test2.home"
-    location: "127.0.0.1:8000"
+  - name: "origin.home"
+    location: "127.0.0.1:10000"
   - name: "pihole.home"
     location: "192.168.1.250"
