@@ -48,12 +48,31 @@ The server can simply be run via `cargo run`. Below are some curl manual test ex
 **HTTP 1.1 client example**
 
 ```
-curl --http1.1 https://localhost:4000/ -H "Host: origin.home" --insecure
+curl -v --http1.1  https://localhost:4000/ -H "Host: origin.home" --insecure
 
-This is the Python origin server, listening on port: 10000
-request HTTP version: HTTP/1.1
+> GET / HTTP/1.1
+> Host: origin.home
+> User-Agent: curl/7.68.0
+> Accept: */*
+>
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+<
+This is the Python origin server, listening on port: 10000 request HTTP version: HTTP/1.1
 ```
 
 **HTTP 2 client example**
 
-TODO
+```
+curl -v --http2  https://localhost:4000/ -H "Host: origin.home" --insecure
+
+> GET / HTTP/2
+> Host: origin.home
+> user-agent: curl/7.68.0
+> accept: */*
+>
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+<
+This is the Python origin server, listening on port: 10000 request HTTP version: HTTP/1.1
+```
+
+You will notice that the origin server reports an HTTP 1.1 protocol, this is due to the code currently downgrading the downstream connection, see the code for more details.
