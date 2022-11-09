@@ -236,27 +236,38 @@ pub async fn run_server(config_path: String) {
 
     let client = Client::new();
 
+    let tls_enabled = match config.tls.get("enabled") {
+        Some(value) => value == "true",
+        _ => false,
+    };
+
     let state = Arc::new(ProxyState::new(config, client));
 
     let current_dir = env::current_dir().unwrap();
-    let tls_config = RustlsConfig::from_pem_file(
-        current_dir.join(
-            state
-                .config
-                .tls
-                .get("cert_path")
-                .expect("Unable to read cert_path"),
-        ),
-        current_dir.join(
-            state
-                .config
-                .tls
-                .get("key_path")
-                .expect("Unable to read key_path"),
-        ),
-    )
-    .await
-    .expect("TLS config error");
+
+    let mut tls_config: Option<RustlsConfig> = None;
+    if tls_enabled {
+        tls_config = Some(
+            RustlsConfig::from_pem_file(
+                current_dir.join(
+                    state
+                        .config
+                        .tls
+                        .get("cert_path")
+                        .expect("Unable to read cert_path"),
+                ),
+                current_dir.join(
+                    state
+                        .config
+                        .tls
+                        .get("key_path")
+                        .expect("Unable to read key_path"),
+                ),
+            )
+            .await
+            .expect("TLS config error"),
+        );
+    }
 
     let app = Router::new()
         .route("/*path", get(proxy_handler))
@@ -264,10 +275,17 @@ pub async fn run_server(config_path: String) {
 
     info!("Reverse proxy listening on {}", listen_address);
 
-    axum_server::bind_rustls(listen_address, tls_config)
-        .serve(app.into_make_service())
-        .await
-        .expect("Error starting axum server");
+    if tls_enabled {
+        axum_server::bind_rustls(listen_address, tls_config.expect("TLS config error"))
+            .serve(app.into_make_service())
+            .await
+            .expect("Error starting axum server");
+    } else {
+        axum_server::bind(listen_address)
+            .serve(app.into_make_service())
+            .await
+            .expect("Error starting axum server");
+    }
 }
 
 #[cfg(test)]

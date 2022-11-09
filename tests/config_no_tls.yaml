@@ -1,9 +1,7 @@
 listen: "127.0.0.1:4000"
 
 tls:
-  enabled: true
-  key_path: "../certs/key"
-  cert_path: "../certs/cert.crt"
+  enabled: false
 
 backends:
   - name: "test.home"

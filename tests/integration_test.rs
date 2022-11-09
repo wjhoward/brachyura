@@ -53,7 +53,7 @@ fn finish(proxy_parent: bool) {
     }
 }
 
-fn start_proxy() -> bool {
+fn start_proxy(config_path: String) -> bool {
     // Track the number of dependant tests, plus the parent thread
     TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     let parent;
@@ -65,7 +65,6 @@ fn start_proxy() -> bool {
         parent = true;
         *proxy_started = true;
         tokio::spawn(async move {
-            let config_path = String::from("./tests/config.yaml");
             run_server(config_path).await;
         });
     } else {
@@ -83,10 +82,14 @@ async fn assert_response(resp: Result<Response, Error>, expected_status: u16, ex
     assert_eq!(body, expected_body);
 }
 
+// -- Tests --
+
+// Standard tests using TLS
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_test() {
     MOCK_BACKEND.lock().unwrap().init().await;
-    let proxy_parent = start_proxy();
+    let proxy_parent = start_proxy(String::from("./tests/config.yaml"));
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -111,7 +114,7 @@ async fn http1_test() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_no_host_header_test() {
     MOCK_BACKEND.lock().unwrap().init().await;
-    let proxy_parent = start_proxy();
+    let proxy_parent = start_proxy(String::from("./tests/config.yaml"));
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -135,7 +138,7 @@ async fn http1_no_host_header_test() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_no_proxy_header_status() {
     MOCK_BACKEND.lock().unwrap().init().await;
-    let proxy_parent = start_proxy();
+    let proxy_parent = start_proxy(String::from("./tests/config.yaml"));
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -160,7 +163,7 @@ async fn http1_no_proxy_header_status() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_test() {
     MOCK_BACKEND.lock().unwrap().init().await;
-    let proxy_parent = start_proxy();
+    let proxy_parent = start_proxy(String::from("./tests/config.yaml"));
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -185,7 +188,7 @@ async fn http2_test() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_no_host_header_test() {
     MOCK_BACKEND.lock().unwrap().init().await;
-    let proxy_parent = start_proxy();
+    let proxy_parent = start_proxy(String::from("./tests/config.yaml"));
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -209,7 +212,7 @@ async fn http2_no_host_header_test() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_no_proxy_header_status() {
     MOCK_BACKEND.lock().unwrap().init().await;
-    let proxy_parent = start_proxy();
+    let proxy_parent = start_proxy(String::from("./tests/config.yaml"));
 
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
@@ -221,6 +224,159 @@ async fn http2_no_proxy_header_status() {
         .build()
         .unwrap()
         .get("https://localhost:4000/status")
+        .header("x-no-proxy", "true")
+        .send()
+        .await;
+
+    // In this case the proxy should respond with a 200
+    assert_response(resp, 200, "The proxy is running").await;
+
+    finish(proxy_parent);
+}
+
+// Tests without TLS
+// Ignored by default, but useful for testing without TLS config
+// Run tests via cargo test -- --ignored
+// TODO, can we use one set of tests and pass a TLS or no TLS config option?
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore]
+async fn http1_test_no_tls() {
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy(String::from("./tests/config_no_tls.yaml"));
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request to the proxy, which should be forwarded to the mock server
+    let resp = reqwest::Client::builder()
+        .http1_only()
+        .build()
+        .unwrap()
+        .get("http://localhost:4000/test")
+        .header(HOST, "test.home")
+        .send()
+        .await;
+
+    // In this case the response should be a 200 from the mock backend
+    assert_response(resp, 200, "This is the mock backend!").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore]
+async fn http1_no_host_header_test_no_tls() {
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy(String::from("./tests/config_no_tls.yaml"));
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request to the proxy without a host header
+    let resp = reqwest::Client::builder()
+        .http1_only()
+        .build()
+        .unwrap()
+        .get("http://localhost:4000/test")
+        .send()
+        .await;
+
+    // In this case the proxy should respond with a 404
+    assert_response(resp, 404, "Host header not defined").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore]
+async fn http1_no_proxy_header_status_no_tls() {
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy(String::from("./tests/config_no_tls.yaml"));
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send an internal /status request
+    let resp = reqwest::Client::builder()
+        .http1_only()
+        .build()
+        .unwrap()
+        .get("http://localhost:4000/status")
+        .header("x-no-proxy", "true")
+        .send()
+        .await;
+
+    // In this case the proxy should respond with a 200
+    assert_response(resp, 200, "The proxy is running").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore]
+async fn http2_test_no_tls() {
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy(String::from("./tests/config_no_tls.yaml"));
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request to the proxy, which should be forwarded to the mock server
+    let resp = reqwest::Client::builder()
+        .http2_adaptive_window(true)
+        .build()
+        .unwrap()
+        .get("http://localhost:4000/test")
+        .header(HOST, "test.home")
+        .send()
+        .await;
+
+    // In this case the response should be a 200 from the mock backend
+    assert_response(resp, 200, "This is the mock backend!").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore]
+async fn http2_no_host_header_test_no_tls() {
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy(String::from("./tests/config_no_tls.yaml"));
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request to the proxy without a host header
+    let resp = reqwest::Client::builder()
+        .http2_adaptive_window(true)
+        .build()
+        .unwrap()
+        .get("http://localhost:4000/test")
+        .send()
+        .await;
+
+    // In this case the proxy should respond with a 404
+    assert_response(resp, 404, "Host header not defined").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore]
+async fn http2_no_proxy_header_status_no_tls() {
+    MOCK_BACKEND.lock().unwrap().init().await;
+    let proxy_parent = start_proxy(String::from("./tests/config_no_tls.yaml"));
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send an internal /status request
+    let resp = reqwest::Client::builder()
+        .http2_adaptive_window(true)
+        .build()
+        .unwrap()
+        .get("http://localhost:4000/status")
         .header("x-no-proxy", "true")
         .send()
         .await;
