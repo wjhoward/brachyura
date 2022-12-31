@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate lazy_static;
+
 use anyhow::{Error, Result};
 use axum::{
     extract::Extension,
@@ -17,6 +20,9 @@ use std::convert::Infallible;
 use std::env;
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::Arc;
+
+mod routing;
+use crate::routing::router;
 
 type Client = hyper::client::Client<HttpConnector, Body>;
 
@@ -39,10 +45,12 @@ struct Config {
     backends: Vec<Backend>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
-struct Backend {
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+pub struct Backend {
     name: Option<String>,
     location: Option<String>,
+    backend_type: Option<String>,
+    locations: Option<Vec<String>>,
     #[serde(flatten)]
     extras: HashMap<String, String>,
 }
@@ -170,18 +178,11 @@ async fn proxy_handler(
 
         // Proxy the request
         _ => {
-            info!("Standard request proxy");
+            debug!("Standard request proxy");
 
-            let mut backend_location = None;
+            let backend_location = router(&state.config.backends, host_header_str);
+            debug!("Selected backend: {:?}", backend_location);
 
-            for backend in state.config.backends.iter().cloned() {
-                if backend.name.is_some() & backend.location.is_some()
-                    && *host_header_str == backend.name.expect("backend.name config error")
-                {
-                    backend_location = backend.location;
-                    break;
-                }
-            }
             if backend_location.is_none() {
                 *response.status_mut() = StatusCode::NOT_FOUND;
             } else {

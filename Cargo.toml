@@ -18,6 +18,7 @@ axum = "0.5.4"
 axum-server = { version = "0.3", features = ["tls-rustls"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 wiremock = "0.5"
