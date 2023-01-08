@@ -1,7 +1,7 @@
 # Brachyura 
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 
-A TLS terminating reverse proxy, which I am primarily using as a Rust learning project. **Currently a work in progress.**
+A TLS terminating, load balancing reverse proxy, which I am primarily using as a Rust learning project. **Currently a work in progress.**
 
 I utilize Nginx as part of my home lab providing reverse proxy functionality as well as TLS termination. The idea of this project is to replace Nginx with a light weight Rust based reverse proxy. Configurable via a yaml config file.
 
@@ -24,6 +24,18 @@ The proxy uses the host header to decide where to send the request, and this is 
         location: "127.0.0.1:10000"
 
 A request with the host header `origin.home` would be proxied to `127.0.0.1:10000`
+
+**Load balancing**
+
+Multiple backends can be defined for a given host header, where requests to these backends is load balanced. Currently only round robin load balancing is supported. Example config:
+
+    backends:
+      - name: "test-lb.home"
+        backend_type: "loadbalanced"
+        locations:
+          - "127.0.0.1:8000"
+          - "127.0.0.1:8001"
+
 
 ---
 
