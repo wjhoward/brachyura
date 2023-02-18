@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate lazy_static;
-
 use anyhow::{Error, Result};
 use axum::{
     extract::Extension,
@@ -19,7 +16,8 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::atomic::AtomicIsize;
+use std::sync::{Arc, Mutex};
 
 mod routing;
 use crate::routing::router;
@@ -55,13 +53,43 @@ pub struct Backend {
     extras: HashMap<String, String>,
 }
 
-struct ProxyState {
+struct ProxyConfig {
     config: Config,
     client: Client,
 }
+impl ProxyConfig {
+    fn new(config: Config, client: Client) -> ProxyConfig {
+        ProxyConfig { config, client }
+    }
+}
+
+#[derive(Debug)]
+pub struct BackendState {
+    rr_count: AtomicIsize,
+}
+struct ProxyState {
+    backends: HashMap<String, Option<BackendState>>,
+}
+
 impl ProxyState {
-    fn new(config: Config, client: Client) -> ProxyState {
-        ProxyState { config, client }
+    fn new(config: &Config) -> ProxyState {
+        let mut backends: HashMap<String, Option<BackendState>> = HashMap::new();
+
+        for backend_config in &config.backends {
+            if backend_config.backend_type == Some("loadbalanced".to_string())
+                && backend_config.name.is_some()
+            {
+                backends.insert(
+                    backend_config.name.clone().unwrap(),
+                    Some(BackendState {
+                        rr_count: AtomicIsize::new(-1),
+                    }),
+                );
+            } else if backend_config.name.is_some() {
+                backends.insert(backend_config.name.clone().unwrap(), None);
+            }
+        }
+        ProxyState { backends }
     }
 }
 
@@ -125,7 +153,8 @@ fn bad_request_handler(mut response: Response<Body>, message: String) -> Respons
 }
 
 async fn proxy_handler(
-    Extension(state): Extension<Arc<ProxyState>>,
+    Extension(proxy_config): Extension<Arc<ProxyConfig>>,
+    Extension(proxy_state): Extension<Arc<Mutex<ProxyState>>>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
     let mut response = Response::new(Body::empty());
@@ -180,7 +209,11 @@ async fn proxy_handler(
         _ => {
             debug!("Standard request proxy");
 
-            let backend_location = router(&state.config.backends, host_header_str);
+            let backend_location = router(
+                &proxy_config.config.backends,
+                &mut proxy_state.lock().unwrap().backends,
+                host_header_str,
+            );
             debug!("Selected backend: {:?}", backend_location);
 
             if backend_location.is_none() {
@@ -209,7 +242,7 @@ async fn proxy_handler(
                 if scheme == "http" {
                     *req.version_mut() = Version::HTTP_11;
                 }
-                response = state
+                response = proxy_config
                     .client
                     .request(req)
                     .await
@@ -237,19 +270,21 @@ pub async fn run_server(config_path: String) {
 
     let client = Client::new();
 
-    let state = Arc::new(ProxyState::new(config, client));
+    let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
+
+    let proxy_config = Arc::new(ProxyConfig::new(config, client));
 
     let current_dir = env::current_dir().unwrap();
     let tls_config = RustlsConfig::from_pem_file(
         current_dir.join(
-            state
+            proxy_config
                 .config
                 .tls
                 .get("cert_path")
                 .expect("Unable to read cert_path"),
         ),
         current_dir.join(
-            state
+            proxy_config
                 .config
                 .tls
                 .get("key_path")
@@ -261,7 +296,8 @@ pub async fn run_server(config_path: String) {
 
     let app = Router::new()
         .route("/*path", get(proxy_handler))
-        .layer(Extension(state));
+        .layer(Extension(proxy_config))
+        .layer(Extension(proxy_state));
 
     info!("Reverse proxy listening on {}", listen_address);
 
