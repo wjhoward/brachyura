@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::env;
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
-use std::sync::atomic::AtomicIsize;
 use std::sync::{Arc, Mutex};
 
 mod routing;
@@ -65,7 +64,7 @@ impl ProxyConfig {
 
 #[derive(Debug)]
 pub struct BackendState {
-    rr_count: AtomicIsize,
+    rr_count: isize,
 }
 struct ProxyState {
     backends: HashMap<String, Option<BackendState>>,
@@ -81,9 +80,7 @@ impl ProxyState {
             {
                 backends.insert(
                     backend_config.name.clone().unwrap(),
-                    Some(BackendState {
-                        rr_count: AtomicIsize::new(-1),
-                    }),
+                    Some(BackendState { rr_count: -1 }),
                 );
             } else if backend_config.name.is_some() {
                 backends.insert(backend_config.name.clone().unwrap(), None);

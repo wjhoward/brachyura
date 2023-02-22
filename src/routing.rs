@@ -42,7 +42,7 @@ fn round_robin_select(
     backend_state: &mut BackendState,
 ) -> Option<String> {
     let backend_count = backend_locations.len() as isize;
-    let rr_count = backend_state.rr_count.get_mut();
+    let rr_count = &mut backend_state.rr_count;
 
     // If this is the first request or if we've exceeded the number of backends
     // set the counter to zero and return the first backend
