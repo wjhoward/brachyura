@@ -75,7 +75,7 @@ impl ProxyState {
         let mut backends: HashMap<String, Option<BackendState>> = HashMap::new();
 
         for backend_config in &config.backends {
-            if backend_config.backend_type == Some("loadbalanced".to_string())
+            if backend_config.backend_type.as_deref() == Some("loadbalanced")
                 && backend_config.name.is_some()
             {
                 backends.insert(
