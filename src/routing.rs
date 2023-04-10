@@ -1,15 +1,19 @@
 // Logic for selecting the request backend
-use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use super::{Backend, BackendState};
+use super::{Backend, BackendState, ProxyState};
 
 pub fn router(
     backends_config: &[Backend],
-    backends_state: &mut HashMap<String, Option<BackendState>>,
+    proxy_state: Arc<Mutex<ProxyState>>,
     host_header: &str,
 ) -> Option<String> {
     // Matches a given host header with a backend
     // Performs load balancing when configured
+
+    // Proxy state mutex is unlocked within this function (rather than in calling code)
+    // so that the mutex guard goes out of scope once the function completes
+    let backends_state = &mut proxy_state.lock().unwrap().backends;
 
     let backend = match_backend(backends_config, host_header)?;
 
@@ -69,9 +73,9 @@ mod tests {
             .await
             .unwrap();
 
-        let mut proxy_mut_state = ProxyState::new(&config).backends;
+        let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 
-        let backend = router(&config.backends, &mut proxy_mut_state, "test.home");
+        let backend = router(&config.backends, proxy_state, "test.home");
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
@@ -80,9 +84,9 @@ mod tests {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string())
             .await
             .unwrap();
-        let mut proxy_mut_state = ProxyState::new(&config).backends;
+        let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 
-        let backend = router(&config.backends, &mut proxy_mut_state, "test-lb.home");
+        let backend = router(&config.backends, proxy_state, "test-lb.home");
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 

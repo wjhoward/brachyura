@@ -1,8 +1,8 @@
 listen: "127.0.0.1:4000"
 
 tls:
-  key_path: "../certs/key"
-  cert_path: "../certs/cert.crt"
+  key_path: "../certs/brachyura.key"
+  cert_path: "../certs/brachyura.crt"
 
 backends:
   - name: "test.home"
@@ -17,3 +17,5 @@ backends:
     locations:
       - "127.0.0.1:8000"
       - "127.0.0.1:8001"
+  - name: "test-no-backend.home"
+    location: "127.0.0.1:8002"
