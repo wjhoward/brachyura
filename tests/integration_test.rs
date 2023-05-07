@@ -291,7 +291,6 @@ async fn test_load_balancing_round_robin() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_proxied_backend_503() {
-
     let proxy_parent = start_proxy();
 
     // Sleep this thread while the server starts up
