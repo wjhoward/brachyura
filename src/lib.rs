@@ -38,6 +38,7 @@ const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
 struct Config {
     listen: SocketAddrV4,
     tls: HashMap<String, String>,
+    timeout: Option<u64>,
     backends: Vec<Backend>,
 }
 
@@ -260,7 +261,7 @@ pub async fn run_server(config_path: String) {
 
     let listen_address = SocketAddr::from(config.listen);
 
-    let client = client::Client::new();
+    let client = client::Client::new(config.timeout);
 
     let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 

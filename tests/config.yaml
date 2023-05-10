@@ -4,6 +4,8 @@ tls:
   key_path: "../certs/brachyura.key"
   cert_path: "../certs/brachyura.crt"
 
+timeout: 500
+
 backends:
   - name: "test.home"
     location: "127.0.0.1:8000"
@@ -17,5 +19,3 @@ backends:
     locations:
       - "127.0.0.1:8000"
       - "127.0.0.1:8001"
-  - name: "test-no-backend.home"
-    location: "127.0.0.1:8002"
