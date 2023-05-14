@@ -45,7 +45,7 @@ impl Client {
             },
             Err(_) => {
                 let mut response = Response::new("Request timeout".into());
-                *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                *response.status_mut() = StatusCode::GATEWAY_TIMEOUT;
                 response
             }
         }
@@ -87,7 +87,7 @@ mod tests {
         let mut request = Request::new(Body::empty());
         *request.uri_mut() = format!("{}/delay", &mock_server.uri()).parse().unwrap();
         let response = client.make_request(request).await;
-        assert_eq!(response.status(), 503);
+        assert_eq!(response.status(), 504);
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
         assert_eq!(body, "Request timeout");
     }

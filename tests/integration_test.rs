@@ -310,8 +310,8 @@ async fn test_proxied_backend_timeout() {
         None,
     )
     .await;
-    // In this case the proxy should respond with a 503
-    assert_response(resp, 503, "Request timeout").await;
+    // In this case the proxy should respond with a 504
+    assert_response(resp, 504, "Request timeout").await;
 
     finish(proxy_parent);
 }
