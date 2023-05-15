@@ -3,6 +3,7 @@ use reqwest::{Error, Response};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use std::{thread, time};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -26,6 +27,11 @@ impl MockBackend {
             Mock::given(method("GET"))
                 .and(path("/test"))
                 .respond_with(template)
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/delay"))
+                .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(1000)))
                 .mount(&mock_server)
                 .await;
             self.mock_server = Some(mock_server);
@@ -285,6 +291,27 @@ async fn test_load_balancing_round_robin() {
     )
     .await;
     assert_response(resp, 200, "This is the mock backend 2!").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_proxied_backend_timeout() {
+    let proxy_parent = start_proxy();
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request which will timeout
+    let resp = http_request(
+        "http1",
+        "https://localhost:4000/delay",
+        Some("test.home"),
+        None,
+    )
+    .await;
+    // In this case the proxy should respond with a 504
+    assert_response(resp, 504, "Request timeout").await;
 
     finish(proxy_parent);
 }

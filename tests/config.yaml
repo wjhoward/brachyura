@@ -1,8 +1,10 @@
 listen: "127.0.0.1:4000"
 
 tls:
-  key_path: "../certs/key"
-  cert_path: "../certs/cert.crt"
+  key_path: "../certs/brachyura.key"
+  cert_path: "../certs/brachyura.crt"
+
+timeout: 500
 
 backends:
   - name: "test.home"

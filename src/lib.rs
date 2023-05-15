@@ -7,7 +7,6 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
-use hyper::client::HttpConnector;
 use hyper::http::{header, header::HeaderName, HeaderValue};
 use hyper::{Body, Method, StatusCode, Version};
 use log::{debug, info};
@@ -18,10 +17,10 @@ use std::env;
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 
+mod client;
 mod routing;
+use crate::client::Client;
 use crate::routing::router;
-
-type Client = hyper::client::Client<HttpConnector, Body>;
 
 #[allow(clippy::declare_interior_mutable_const)]
 const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
@@ -39,6 +38,7 @@ const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
 struct Config {
     listen: SocketAddrV4,
     tls: HashMap<String, String>,
+    timeout: Option<u64>,
     backends: Vec<Backend>,
 }
 
@@ -64,9 +64,9 @@ impl ProxyConfig {
 
 #[derive(Debug)]
 pub struct BackendState {
-    rr_count: isize,
+    rr_count: isize, // Round robin counter
 }
-struct ProxyState {
+pub struct ProxyState {
     backends: HashMap<String, Option<BackendState>>,
 }
 
@@ -208,10 +208,9 @@ async fn proxy_handler(
 
             let backend_location = router(
                 &proxy_config.config.backends,
-                &mut proxy_state.lock().unwrap().backends,
+                proxy_state.clone(),
                 host_header_str,
             );
-            debug!("Selected backend: {:?}", backend_location);
 
             if backend_location.is_none() {
                 *response.status_mut() = StatusCode::NOT_FOUND;
@@ -239,11 +238,8 @@ async fn proxy_handler(
                 if scheme == "http" {
                     *req.version_mut() = Version::HTTP_11;
                 }
-                response = proxy_config
-                    .client
-                    .request(req)
-                    .await
-                    .expect("Error making downstream request");
+
+                response = proxy_config.client.make_request(req).await;
                 info!(
                     "Proxied response from: {} | Status: {}",
                     uri,
@@ -265,7 +261,7 @@ pub async fn run_server(config_path: String) {
 
     let listen_address = SocketAddr::from(config.listen);
 
-    let client = Client::new();
+    let client = client::Client::new(config.timeout);
 
     let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 
