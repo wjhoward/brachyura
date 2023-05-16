@@ -1,7 +1,7 @@
 # Brachyura 
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 
-A TLS terminating, load balancing reverse proxy, which I am primarily using as a Rust learning project. **Currently a work in progress.**
+A TLS terminating, load balancing reverse proxy, which I am primarily using as a Rust learning project. **Currently an experimental work in progress project.**
 
 I utilize Nginx as part of my home lab providing reverse proxy functionality as well as TLS termination. The idea of this project is to replace Nginx with a light weight Rust based reverse proxy. Configurable via a yaml config file.
 
@@ -14,6 +14,9 @@ Configured in `config.yaml`
 
 ### TLS config
 The key and cert paths are also defined in the yaml file. Only the connection between the client and proxy is encrypted.
+
+### Timeout config
+There is an optional global timeout config value in milliseconds (see the example config file) which applies to all connections from the proxy to backends. Defaults to 60 seconds if not configured.
 
 ### Proxy backend config
 
