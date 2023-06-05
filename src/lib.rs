@@ -18,8 +18,10 @@ use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 
 mod client;
+mod metrics;
 mod routing;
 use crate::client::Client;
+use crate::metrics::{encode_metrics, METRICS};
 use crate::routing::router;
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -189,10 +191,15 @@ async fn proxy_handler(
 
     let no_proxy = req.headers().contains_key("x-no-proxy");
 
+    METRICS.http_request_counter.inc();
+
     match (req.method(), req.uri().path(), no_proxy, host_header_set) {
-        // Proxy internal status endpoint
+        // Proxy internal endpoints
         (&Method::GET, "/status", true, false) => {
             *response.body_mut() = Body::from("The proxy is running");
+        }
+        (&Method::GET, "/metrics", true, false) => {
+            *response.body_mut() = Body::from(encode_metrics().unwrap());
         }
 
         // A non internal request, but the host header has not been defined
