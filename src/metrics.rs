@@ -28,3 +28,24 @@ pub fn encode_metrics() -> Result<String, Error> {
     encoder.encode(&metric_families, &mut buffer)?;
     Ok(String::from_utf8(buffer.clone())?)
 }
+
+mod tests {
+    #![allow(unused_imports)]
+    use super::*;
+
+    #[tokio::test]
+    async fn test_metrics_struct() {
+        METRICS.http_request_counter.inc();
+        assert_eq!(METRICS.http_request_counter.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_encode_metrics() {
+        METRICS.http_request_counter.inc();
+        assert_eq!(
+            encode_metrics().unwrap(),
+            "# HELP http_requests_total Number of http requests received\n\
+            # TYPE http_requests_total counter\nhttp_requests_total 2\n"
+        );
+    }
+}
