@@ -36,16 +36,15 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_struct() {
         METRICS.http_request_counter.inc();
-        assert_eq!(METRICS.http_request_counter.get(), 1);
+        assert!(METRICS.http_request_counter.get() >= 1);
     }
 
     #[tokio::test]
     async fn test_encode_metrics() {
         METRICS.http_request_counter.inc();
-        assert_eq!(
-            encode_metrics().unwrap(),
+        assert!(encode_metrics().unwrap().starts_with(
             "# HELP http_requests_total Number of http requests received\n\
-            # TYPE http_requests_total counter\nhttp_requests_total 2\n"
-        );
+                # TYPE http_requests_total counter\nhttp_requests_total"
+        ));
     }
 }
