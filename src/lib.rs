@@ -16,6 +16,7 @@ use std::convert::Infallible;
 use std::env;
 use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 mod client;
 mod metrics;
@@ -156,6 +157,7 @@ async fn proxy_handler(
     Extension(proxy_state): Extension<Arc<Mutex<ProxyState>>>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
+    let start = Instant::now();
     let mut response = Response::new(Body::empty());
 
     debug!(
@@ -191,16 +193,21 @@ async fn proxy_handler(
 
     let no_proxy = req.headers().contains_key("x-no-proxy");
 
-    METRICS.http_request_counter.inc();
-
     match (req.method(), req.uri().path(), no_proxy, host_header_set) {
         // Proxy internal endpoints
         (&Method::GET, "/status", true, false) => {
             *response.body_mut() = Body::from("The proxy is running");
         }
-        (&Method::GET, "/metrics", true, false) => {
-            *response.body_mut() = Body::from(encode_metrics().unwrap());
-        }
+        (&Method::GET, "/metrics", true, false) => match encode_metrics() {
+            Ok(encoded_metrics) => {
+                println!("Encoded metrics: {:?}", encoded_metrics);
+                *response.body_mut() = Body::from(encoded_metrics);
+            }
+            Err(e) => {
+                *response.body_mut() = Body::from(format!("Error encoding metrics: {e}"));
+                *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            }
+        },
 
         // A non internal request, but the host header has not been defined
         (_, _, false, false) => {
@@ -229,7 +236,7 @@ async fn proxy_handler(
 
                 let uri = Uri::builder()
                     .scheme(scheme)
-                    .authority(backend_location.unwrap())
+                    .authority(backend_location.clone().unwrap())
                     .path_and_query(req.uri().path())
                     .build()
                     .expect("Unable to extract URI");
@@ -252,6 +259,24 @@ async fn proxy_handler(
                     uri,
                     response.status()
                 );
+                // Record metrics
+                let duration = start.elapsed();
+                info!("Time elapsed processing request is: {:?}", duration);
+                METRICS
+                    .http_request_counter
+                    .with_label_values(&[
+                        response.status().as_str(),
+                        backend_location.clone().unwrap().as_str(),
+                    ])
+                    .inc_by(1);
+
+                METRICS
+                    .http_request_duration
+                    .with_label_values(&[
+                        response.status().as_str(),
+                        backend_location.unwrap().as_str(),
+                    ])
+                    .observe(duration.as_secs_f64())
             }
         }
     };

@@ -197,16 +197,22 @@ async fn http1_no_proxy_header_metrics() {
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
 
+    // Send a request to ensure metrics exist
+    let _ = http_request(
+        "http2",
+        "https://localhost:4000/test",
+        Some("test.home"),
+        None,
+    )
+    .await;
+
     // Send an internal /metrics request
     let resp = http_request("http1", "https://localhost:4000/metrics", None, Some(true)).await;
     let response = resp.unwrap();
     let status = response.status();
     let body = response.bytes().await.unwrap();
     assert_eq!(status, 200);
-    assert!(body.starts_with(
-        b"# HELP http_requests_total Number of http requests received\n\
-        # TYPE http_requests_total counter\nhttp_requests_total"
-    ));
+    assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
 
     finish(proxy_parent);
 }
@@ -292,16 +298,22 @@ async fn http2_no_proxy_header_metrics() {
     // Sleep this thread while the server starts up
     thread::sleep(time::Duration::from_millis(1000));
 
+    // Send a request to ensure metrics exist
+    let _ = http_request(
+        "http2",
+        "https://localhost:4000/test",
+        Some("test.home"),
+        None,
+    )
+    .await;
+
     // Send an internal /metrics request
     let resp = http_request("http2", "https://localhost:4000/metrics", None, Some(true)).await;
     let response = resp.unwrap();
     let status = response.status();
     let body = response.bytes().await.unwrap();
     assert_eq!(status, 200);
-    assert!(body.starts_with(
-        b"# HELP http_requests_total Number of http requests received\n\
-        # TYPE http_requests_total counter\nhttp_requests_total"
-    ));
+    assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
 
     finish(proxy_parent);
 }

@@ -1,22 +1,31 @@
 use anyhow::Error;
 use once_cell::sync::Lazy;
-use prometheus::register_int_counter;
-use prometheus::{self, Encoder, IntCounter, TextEncoder};
+use prometheus::{self, Encoder, HistogramVec, IntCounterVec, TextEncoder};
+use prometheus::{register_histogram_vec, register_int_counter_vec};
 
 pub static METRICS: Lazy<Metrics> = Lazy::new(Metrics::new);
 
 pub struct Metrics {
-    pub http_request_counter: IntCounter,
+    pub http_request_counter: IntCounterVec,
+    pub http_request_duration: HistogramVec,
 }
 
 impl Metrics {
     fn new() -> Metrics {
         Metrics {
-            http_request_counter: register_int_counter!(
-                "http_requests_total",
-                "Number of http requests received"
+            http_request_counter: register_int_counter_vec!(
+                "http_request_total",
+                "Number of http requests received",
+                &["status", "backend"]
             )
-            .unwrap(),
+            .expect("Error creating prometheus counter"),
+
+            http_request_duration: register_histogram_vec!(
+                "http_request_duration_seconds",
+                "The HTTP request latencies in seconds.",
+                &["status", "backend"]
+            )
+            .expect("Error creating histogram counter"),
         }
     }
 }
@@ -35,16 +44,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_struct() {
-        METRICS.http_request_counter.inc();
-        assert!(METRICS.http_request_counter.get() >= 1);
+        METRICS
+            .http_request_counter
+            .with_label_values(&["200", "test"])
+            .inc_by(1);
+        assert!(
+            METRICS
+                .http_request_counter
+                .with_label_values(&["200", "test"])
+                .get()
+                >= 1
+        );
     }
 
     #[tokio::test]
     async fn test_encode_metrics() {
-        METRICS.http_request_counter.inc();
-        assert!(encode_metrics().unwrap().starts_with(
-            "# HELP http_requests_total Number of http requests received\n\
-                # TYPE http_requests_total counter\nhttp_requests_total"
+        METRICS
+            .http_request_counter
+            .with_label_values(&["200", "test"])
+            .inc_by(1);
+        assert!(encode_metrics().unwrap().contains(
+            "# HELP http_request_total Number of http requests received\n\
+                # TYPE http_request_total counter\nhttp_request_total"
         ));
     }
 }
