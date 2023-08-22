@@ -9,7 +9,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
 use hyper::http::{header, header::HeaderName, HeaderValue};
 use hyper::{Body, Method, StatusCode, Version};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -22,7 +22,7 @@ mod client;
 mod metrics;
 mod routing;
 use crate::client::Client;
-use crate::metrics::{encode_metrics, METRICS};
+use crate::metrics::{encode_metrics, record_metrics};
 use crate::routing::router;
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -200,10 +200,10 @@ async fn proxy_handler(
         }
         (&Method::GET, "/metrics", true, false) => match encode_metrics() {
             Ok(encoded_metrics) => {
-                println!("Encoded metrics: {:?}", encoded_metrics);
                 *response.body_mut() = Body::from(encoded_metrics);
             }
             Err(e) => {
+                warn!("Error encoding metrics: {e}");
                 *response.body_mut() = Body::from(format!("Error encoding metrics: {e}"));
                 *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             }
@@ -226,57 +226,46 @@ async fn proxy_handler(
                 host_header_str,
             );
 
-            if backend_location.is_none() {
-                *response.status_mut() = StatusCode::NOT_FOUND;
-            } else {
-                // Proxy to backend
-
-                // Scheme currently hardcoded to http (given this is a TLS terminating proxy)
-                let scheme = "http";
-
-                let uri = Uri::builder()
-                    .scheme(scheme)
-                    .authority(backend_location.clone().unwrap())
-                    .path_and_query(req.uri().path())
-                    .build()
-                    .expect("Unable to extract URI");
-
-                // Simply take the existing request and mutate the uri and headers
-                *req.uri_mut() = uri.clone();
-                adjust_proxied_headers(&mut req)
-                    .await
-                    .expect("Unable to adjust headers");
-
-                // If the backend scheme is http, adjust the original request HTTP version to 1
-                // (It seems that the HTTP2 implementation requires TLS)
-                if scheme == "http" {
-                    *req.version_mut() = Version::HTTP_11;
+            match backend_location {
+                None => {
+                    *response.status_mut() = StatusCode::NOT_FOUND;
                 }
+                Some(backend_location) => {
+                    // Proxy to backend
 
-                response = proxy_config.client.make_request(req).await;
-                info!(
-                    "Proxied response from: {} | Status: {}",
-                    uri,
-                    response.status()
-                );
-                // Record metrics
-                let duration = start.elapsed();
-                info!("Time elapsed processing request is: {:?}", duration);
-                METRICS
-                    .http_request_counter
-                    .with_label_values(&[
-                        response.status().as_str(),
-                        backend_location.clone().unwrap().as_str(),
-                    ])
-                    .inc_by(1);
+                    // Scheme currently hardcoded to http (given this is a TLS terminating proxy)
+                    let scheme = "http";
 
-                METRICS
-                    .http_request_duration
-                    .with_label_values(&[
-                        response.status().as_str(),
-                        backend_location.unwrap().as_str(),
-                    ])
-                    .observe(duration.as_secs_f64())
+                    let uri = Uri::builder()
+                        .scheme(scheme)
+                        .authority(backend_location.clone())
+                        .path_and_query(req.uri().path())
+                        .build()
+                        .expect("Unable to extract URI");
+
+                    // Simply take the existing request and mutate the uri and headers
+                    *req.uri_mut() = uri.clone();
+                    adjust_proxied_headers(&mut req)
+                        .await
+                        .expect("Unable to adjust headers");
+
+                    // If the backend scheme is http, adjust the original request HTTP version to 1
+                    // (It seems that the HTTP2 implementation requires TLS)
+                    if scheme == "http" {
+                        *req.version_mut() = Version::HTTP_11;
+                    }
+
+                    response = proxy_config.client.make_request(req).await;
+                    info!(
+                        "Proxied response from: {} | Status: {}",
+                        uri,
+                        response.status()
+                    );
+                    // Record metrics
+                    if let Err(e) = record_metrics(&response, backend_location, start.elapsed()) {
+                        warn!("Error recording metrics: {e}")
+                    };
+                }
             }
         }
     };

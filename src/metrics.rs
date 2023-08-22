@@ -1,4 +1,8 @@
+use std::time::Duration;
+
 use anyhow::Error;
+use hyper::http::Response;
+use hyper::Body;
 use once_cell::sync::Lazy;
 use prometheus::{self, Encoder, HistogramVec, IntCounterVec, TextEncoder};
 use prometheus::{register_histogram_vec, register_int_counter_vec};
@@ -38,6 +42,23 @@ pub fn encode_metrics() -> Result<String, Error> {
     Ok(String::from_utf8(buffer.clone())?)
 }
 
+pub fn record_metrics(
+    response: &Response<Body>,
+    backend_location: String,
+    duration: Duration,
+) -> Result<(), Error> {
+    METRICS
+        .http_request_counter
+        .with_label_values(&[response.status().as_str(), backend_location.as_str()])
+        .inc_by(1);
+
+    METRICS
+        .http_request_duration
+        .with_label_values(&[response.status().as_str(), backend_location.as_str()])
+        .observe(duration.as_secs_f64());
+    Ok(())
+}
+
 mod tests {
     #![allow(unused_imports)]
     use super::*;
@@ -67,5 +88,20 @@ mod tests {
             "# HELP http_request_total Number of http requests received\n\
                 # TYPE http_request_total counter\nhttp_request_total"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_record_metrics() {
+        let response = Response::builder().body(Body::from("test")).unwrap();
+        assert_eq!(
+            record_metrics(
+                &response,
+                "127.0.0.1:10000".to_string(),
+                Duration::from_micros(10)
+            )
+            .is_ok(),
+            true
+        );
+        assert!(encode_metrics().unwrap().contains("127.0.0.1:10000"));
     }
 }

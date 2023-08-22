@@ -199,7 +199,7 @@ async fn http1_no_proxy_header_metrics() {
 
     // Send a request to ensure metrics exist
     let _ = http_request(
-        "http2",
+        "http1",
         "https://localhost:4000/test",
         Some("test.home"),
         None,
