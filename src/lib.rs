@@ -211,7 +211,7 @@ async fn proxy_handler(
 
         // A non internal request, but the host header has not been defined
         (_, _, false, false) => {
-            info!("Host header not defined");
+            debug!("Host header not defined");
             *response.body_mut() = Body::from("Host header not defined");
             *response.status_mut() = StatusCode::NOT_FOUND;
         }
@@ -256,7 +256,7 @@ async fn proxy_handler(
                     }
 
                     response = proxy_config.client.make_request(req).await;
-                    info!(
+                    debug!(
                         "Proxied response from: {} | Status: {}",
                         uri,
                         response.status()
@@ -309,7 +309,10 @@ pub async fn run_server(config_path: String) {
     .expect("TLS config error");
 
     let app = Router::new()
-        .route("/*path", get(proxy_handler))
+        .route(
+            "/*path",
+            get(proxy_handler).post(proxy_handler).put(proxy_handler),
+        )
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
 
