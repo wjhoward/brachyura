@@ -1,5 +1,5 @@
 use reqwest::header::HOST;
-use reqwest::{Error, Response};
+use reqwest::{Error, Method, Response};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -25,6 +25,11 @@ impl MockBackend {
             let template = ResponseTemplate::new(200).set_body_raw(resp_body, "text/plain");
 
             Mock::given(method("GET"))
+                .and(path("/test"))
+                .respond_with(template.clone())
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("POST"))
                 .and(path("/test"))
                 .respond_with(template)
                 .mount(&mock_server)
@@ -94,6 +99,7 @@ async fn http_request(
     url: &str,
     host_header: Option<&str>,
     no_proxy: Option<bool>,
+    method: Option<Method>,
 ) -> Result<Response, Error> {
     let mut client_builder = reqwest::Client::builder().danger_accept_invalid_certs(true);
     if protocol == "http1" {
@@ -103,21 +109,28 @@ async fn http_request(
     }
     let client = client_builder.build().unwrap();
 
+    let client_method;
+    if method == Some(Method::POST) {
+        client_method = client.post(url);
+    } else if method == Some(Method::PUT) {
+        client_method = client.put(url);
+    } else {
+        client_method = client.get(url);
+    }
     if host_header.is_some() {
-        client
-            .get(url)
+        client_method
             .header(HOST, host_header.unwrap())
             .send()
             .await
     } else if no_proxy.is_some() && no_proxy.unwrap() {
-        client.get(url).header("x-no-proxy", "true").send().await
+        client_method.header("x-no-proxy", "true").send().await
     } else {
-        client.get(url).send().await
+        client_method.send().await
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http1_test() {
+async fn http1_get() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -134,6 +147,7 @@ async fn http1_test() {
         "https://localhost:4000/test",
         Some("test.home"),
         None,
+        None,
     )
     .await;
 
@@ -144,7 +158,7 @@ async fn http1_test() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http1_no_host_header_test() {
+async fn http1_get_no_host_header() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -156,7 +170,7 @@ async fn http1_no_host_header_test() {
     thread::sleep(time::Duration::from_millis(1000));
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http1", "https://localhost:4000/test", None, None).await;
+    let resp = http_request("http1", "https://localhost:4000/test", None, None, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, "Host header not defined").await;
@@ -165,7 +179,7 @@ async fn http1_no_host_header_test() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http1_no_proxy_header_status() {
+async fn http1_get_no_proxy_header_status() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -177,7 +191,14 @@ async fn http1_no_proxy_header_status() {
     thread::sleep(time::Duration::from_millis(1000));
 
     // Send an internal /status request
-    let resp = http_request("http1", "https://localhost:4000/status", None, Some(true)).await;
+    let resp = http_request(
+        "http1",
+        "https://localhost:4000/status",
+        None,
+        Some(true),
+        None,
+    )
+    .await;
 
     // In this case the proxy should respond with a 200
     assert_response(resp, 200, "The proxy is running").await;
@@ -186,7 +207,7 @@ async fn http1_no_proxy_header_status() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http1_no_proxy_header_metrics() {
+async fn http1_get_no_proxy_header_metrics() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -203,11 +224,19 @@ async fn http1_no_proxy_header_metrics() {
         "https://localhost:4000/test",
         Some("test.home"),
         None,
+        None,
     )
     .await;
 
     // Send an internal /metrics request
-    let resp = http_request("http1", "https://localhost:4000/metrics", None, Some(true)).await;
+    let resp = http_request(
+        "http1",
+        "https://localhost:4000/metrics",
+        None,
+        Some(true),
+        None,
+    )
+    .await;
     let response = resp.unwrap();
     let status = response.status();
     let body = response.bytes().await.unwrap();
@@ -218,7 +247,35 @@ async fn http1_no_proxy_header_metrics() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http2_test() {
+async fn http1_post() {
+    MOCK_BACKEND
+        .lock()
+        .unwrap()
+        .init("127.0.0.1:8000", "This is the mock backend!")
+        .await;
+    let proxy_parent = start_proxy();
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request to the proxy, which should be forwarded to the mock server
+    let resp = http_request(
+        "http1",
+        "https://localhost:4000/test",
+        Some("test.home"),
+        None,
+        Some(Method::POST),
+    )
+    .await;
+
+    // In this case the response should be a 200 from the mock backend
+    assert_response(resp, 200, "This is the mock backend!").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn http2_get() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -235,6 +292,7 @@ async fn http2_test() {
         "https://localhost:4000/test",
         Some("test.home"),
         None,
+        None,
     )
     .await;
 
@@ -245,7 +303,7 @@ async fn http2_test() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http2_no_host_header_test() {
+async fn http2_get_no_host_header() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -257,7 +315,7 @@ async fn http2_no_host_header_test() {
     thread::sleep(time::Duration::from_millis(1000));
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http2", "https://localhost:4000/test", None, None).await;
+    let resp = http_request("http2", "https://localhost:4000/test", None, None, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, "Host header not defined").await;
@@ -266,7 +324,7 @@ async fn http2_no_host_header_test() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http2_no_proxy_header_status() {
+async fn http2_get_no_proxy_header_status() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -278,7 +336,14 @@ async fn http2_no_proxy_header_status() {
     thread::sleep(time::Duration::from_millis(1000));
 
     // Send an internal /status request
-    let resp = http_request("http2", "https://localhost:4000/status", None, Some(true)).await;
+    let resp = http_request(
+        "http2",
+        "https://localhost:4000/status",
+        None,
+        Some(true),
+        None,
+    )
+    .await;
 
     // In this case the proxy should respond with a 200
     assert_response(resp, 200, "The proxy is running").await;
@@ -287,7 +352,7 @@ async fn http2_no_proxy_header_status() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn http2_no_proxy_header_metrics() {
+async fn http2_get_no_proxy_header_metrics() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -304,11 +369,19 @@ async fn http2_no_proxy_header_metrics() {
         "https://localhost:4000/test",
         Some("test.home"),
         None,
+        None,
     )
     .await;
 
     // Send an internal /metrics request
-    let resp = http_request("http2", "https://localhost:4000/metrics", None, Some(true)).await;
+    let resp = http_request(
+        "http2",
+        "https://localhost:4000/metrics",
+        None,
+        Some(true),
+        None,
+    )
+    .await;
     let response = resp.unwrap();
     let status = response.status();
     let body = response.bytes().await.unwrap();
@@ -319,7 +392,35 @@ async fn http2_no_proxy_header_metrics() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn test_load_balancing_round_robin() {
+async fn http2_post() {
+    MOCK_BACKEND
+        .lock()
+        .unwrap()
+        .init("127.0.0.1:8000", "This is the mock backend!")
+        .await;
+    let proxy_parent = start_proxy();
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+
+    // Send a request to the proxy, which should be forwarded to the mock server
+    let resp = http_request(
+        "http2",
+        "https://localhost:4000/test",
+        Some("test.home"),
+        None,
+        Some(Method::POST),
+    )
+    .await;
+
+    // In this case the response should be a 200 from the mock backend
+    assert_response(resp, 200, "This is the mock backend!").await;
+
+    finish(proxy_parent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn load_balancing_round_robin() {
     MOCK_BACKEND
         .lock()
         .unwrap()
@@ -341,6 +442,7 @@ async fn test_load_balancing_round_robin() {
         "https://localhost:4000/test",
         Some("test-lb.home"),
         None,
+        None,
     )
     .await;
 
@@ -352,6 +454,7 @@ async fn test_load_balancing_round_robin() {
         "https://localhost:4000/test",
         Some("test-lb.home"),
         None,
+        None,
     )
     .await;
     assert_response(resp, 200, "This is the mock backend 2!").await;
@@ -360,7 +463,7 @@ async fn test_load_balancing_round_robin() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn test_proxied_backend_timeout() {
+async fn proxied_backend_timeout() {
     let proxy_parent = start_proxy();
 
     // Sleep this thread while the server starts up
@@ -371,6 +474,7 @@ async fn test_proxied_backend_timeout() {
         "http1",
         "https://localhost:4000/delay",
         Some("test.home"),
+        None,
         None,
     )
     .await;

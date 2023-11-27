@@ -309,7 +309,10 @@ pub async fn run_server(config_path: String) {
     .expect("TLS config error");
 
     let app = Router::new()
-        .route("/*path", get(proxy_handler))
+        .route(
+            "/*path",
+            get(proxy_handler).post(proxy_handler).put(proxy_handler),
+        )
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
 
