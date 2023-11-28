@@ -239,7 +239,12 @@ async fn proxy_handler(
                     let uri = Uri::builder()
                         .scheme(scheme)
                         .authority(backend_location.clone())
-                        .path_and_query(req.uri().path())
+                        .path_and_query(
+                            req.uri()
+                                .path_and_query()
+                                .expect("Unable to extract path and query")
+                                .clone(),
+                        )
                         .build()
                         .expect("Unable to extract URI");
 
