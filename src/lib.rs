@@ -195,10 +195,10 @@ async fn proxy_handler(
 
     match (req.method(), req.uri().path(), no_proxy, host_header_set) {
         // Proxy internal endpoints
-        (&Method::GET, "/status", true, false) => {
+        (&Method::GET, "/status", true, _) => {
             *response.body_mut() = Body::from("The proxy is running");
         }
-        (&Method::GET, "/metrics", true, false) => match encode_metrics() {
+        (&Method::GET, "/metrics", true, _) => match encode_metrics() {
             Ok(encoded_metrics) => {
                 *response.body_mut() = Body::from(encoded_metrics);
             }
