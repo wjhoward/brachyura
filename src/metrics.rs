@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use anyhow::Error;
+use axum::body::Body;
 use hyper::http::Response;
-use hyper::Body;
 use once_cell::sync::Lazy;
-use prometheus::{self, Encoder, HistogramVec, IntCounterVec, TextEncoder};
-use prometheus::{register_histogram_vec, register_int_counter_vec};
+use prometheus::{
+    self, register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec, IntCounterVec,
+    TextEncoder,
+};
 
 pub static METRICS: Lazy<Metrics> = Lazy::new(Metrics::new);
 

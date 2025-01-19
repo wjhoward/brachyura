@@ -1,4 +1,4 @@
-listen: "127.0.0.1:4000"
+listen: "0.0.0.0:4000"
 
 tls:
   key_path: "../certs/brachyura.key"
