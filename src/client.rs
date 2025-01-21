@@ -25,7 +25,7 @@ impl Client {
         Client { client, timeout }
     }
 
-    pub async fn make_request(&self, req: Request<Body>) -> Response<axum::body::Body> {
+    pub async fn make_request(&self, req: Request<Body>) -> Response<Body> {
         match timeout(
             Duration::from_millis(self.timeout.unwrap_or(60)),
             self.client.request(req),

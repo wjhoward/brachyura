@@ -175,7 +175,7 @@ async fn http1_get() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -199,9 +199,7 @@ async fn http1_get_no_host_header() {
     test_init();
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http1", "https://localhost:4000/test", None, None, None).await;
-
-    debug!("Resp: {:?}", resp);
+    let resp = http_request("http1", "https://127.0.0.1:4000/test", None, None, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
@@ -222,7 +220,7 @@ async fn http1_get_no_proxy_header_status() {
     // Send an internal /status request
     let resp = http_request(
         "http1",
-        "https://localhost:4000/status",
+        "https://127.0.0.1:4000/status",
         None,
         Some(true),
         None,
@@ -248,7 +246,7 @@ async fn http1_get_no_proxy_header_metrics() {
     // Send a request to ensure metrics exist
     let _ = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -258,7 +256,7 @@ async fn http1_get_no_proxy_header_metrics() {
     // Send an internal /metrics request
     let resp = http_request(
         "http1",
-        "https://localhost:4000/metrics",
+        "https://127.0.0.1:4000/metrics",
         None,
         Some(true),
         None,
@@ -286,7 +284,7 @@ async fn http1_head() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::HEAD),
@@ -312,7 +310,7 @@ async fn http1_post() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::POST),
@@ -338,7 +336,7 @@ async fn http1_put() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::PUT),
@@ -364,7 +362,7 @@ async fn http2_get() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -388,7 +386,7 @@ async fn http2_get_no_host_header() {
     test_init();
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http2", "https://localhost:4000/test", None, None, None).await;
+    let resp = http_request("http2", "https://127.0.0.1:4000/test", None, None, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
@@ -409,7 +407,7 @@ async fn http2_get_no_proxy_header_status() {
     // Send an internal /status request
     let resp = http_request(
         "http2",
-        "https://localhost:4000/status",
+        "https://127.0.0.1:4000/status",
         None,
         Some(true),
         None,
@@ -435,7 +433,7 @@ async fn http2_get_no_proxy_header_metrics() {
     // Send a request to ensure metrics exist
     let _ = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -445,7 +443,7 @@ async fn http2_get_no_proxy_header_metrics() {
     // Send an internal /metrics request
     let resp = http_request(
         "http2",
-        "https://localhost:4000/metrics",
+        "https://127.0.0.1:4000/metrics",
         None,
         Some(true),
         None,
@@ -473,7 +471,7 @@ async fn http2_head() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::HEAD),
@@ -499,7 +497,7 @@ async fn http2_post() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::POST),
@@ -525,7 +523,7 @@ async fn http2_put() {
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::PUT),
@@ -556,7 +554,7 @@ async fn load_balancing_round_robin() {
     // Response from the first mock backend
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test-lb.home"),
         None,
         None,
@@ -568,7 +566,7 @@ async fn load_balancing_round_robin() {
     // Response from the second mock backend
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test-lb.home"),
         None,
         None,
@@ -587,7 +585,7 @@ async fn proxied_backend_timeout() {
     // Send a request which will timeout
     let resp = http_request(
         "http1",
-        "https://localhost:4000/delay",
+        "https://127.0.0.1:4000/delay",
         Some("test.home"),
         None,
         None,
