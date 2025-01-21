@@ -10,7 +10,6 @@ use std::{
 
 use brachyura::run_server;
 use reqwest::{header::HOST, Error, Method, Response};
-use tracing::debug;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
