@@ -1,29 +1,34 @@
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    env,
+    net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+
 use anyhow::{Error, Result};
 use axum::{
+    body::Body,
     extract::Extension,
-    http::{uri::Uri, Request, Response},
+    http::{uri::Uri, HeaderValue, Method, Request, Response, StatusCode, Version},
     routing::get,
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
-use hyper::http::{header, header::HeaderName, HeaderValue};
-use hyper::{Body, Method, StatusCode, Version};
+use hyper::http::{header, HeaderName};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::env;
-use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 mod client;
 mod metrics;
 mod routing;
-use crate::client::Client;
-use crate::metrics::{encode_metrics, record_metrics};
-use crate::routing::router;
+use crate::{
+    client::Client,
+    metrics::{encode_metrics, record_metrics},
+    routing::router,
+};
 
 #[allow(clippy::declare_interior_mutable_const)]
 const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
@@ -104,7 +109,7 @@ async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
 
     // Remove hop by hop headers
     for h in HOP_BY_HOP_HEADERS {
-        req.headers_mut().remove(h);
+        req.headers_mut().remove(h.to_string());
     }
 
     // Append a no-proxy header to avoid loops
@@ -114,36 +119,24 @@ async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
     Ok(())
 }
 
-fn get_host_header(req: &Request<Body>) -> Result<&str, Error> {
-    match req.version() {
-        Version::HTTP_09 | Version::HTTP_10 | Version::HTTP_11 => Ok(req
-            .headers()
-            .get("host")
-            .ok_or_else(|| {
-                anyhow::Error::msg(format!(
-                    "Unable to parse host header, version: {:?}",
-                    req.version()
-                ))
-            })?
-            .to_str()?),
-        _ => Ok(req
-            .uri()
-            .authority()
-            .ok_or_else(|| {
-                anyhow::Error::msg(format!(
-                    "Unable to parse host header, version: {:?}",
-                    req.version()
-                ))
-            })
-            .unwrap()
-            .as_ref()),
-    }
-}
+fn get_host(req: &Request<Body>) -> Option<String> {
+    // Look for a host header first, otherwise fallback to checking the HTTP Authority (http2+)
+    let get_host_header = req.headers().get("host");
+    let host = match get_host_header {
+        Some(header) => header.to_str().ok().map(|s| s.to_string()),
+        _ => req.uri().authority().map(|authority| authority.to_string()),
+    };
 
-fn host_header_set(host_header: String) -> bool {
-    // For HTTP1, If the host header is not an IP address
-    // we can probably assume its been set manually
-    host_header.to_socket_addrs().is_err()
+    // The host could be an IP address, which we don't regard as a host for the purpose of proxying
+    if host
+        .clone()
+        .unwrap_or("".to_string())
+        .to_socket_addrs()
+        .is_ok()
+    {
+        return None;
+    }
+    host
 }
 
 fn bad_request_handler(mut response: Response<Body>, message: String) -> Response<Body> {
@@ -179,21 +172,23 @@ async fn proxy_handler(
         }
     }
 
-    // Extract the host header
-    let host_header_str = match get_host_header(&req) {
-        Ok(host_header_str) => host_header_str,
-        Err(e) => {
-            return Ok(bad_request_handler(
-                response,
-                format!("Unable to parse host header: {:?}", e),
-            ))
-        }
-    };
-    let host_header_set = host_header_set(host_header_str.to_string());
+    // Extract the host header / authority
+    let host_authority = get_host(&req);
 
     let no_proxy = req.headers().contains_key("x-no-proxy");
 
-    match (req.method(), req.uri().path(), no_proxy, host_header_set) {
+    debug!(
+        "no_proxy header: {}, host header: {:?}",
+        no_proxy,
+        host_authority.clone()
+    );
+
+    match (
+        req.method(),
+        req.uri().path(),
+        no_proxy,
+        host_authority.clone(),
+    ) {
         // Proxy internal endpoints
         (&Method::GET, "/status", true, _) => {
             *response.body_mut() = Body::from("The proxy is running");
@@ -210,7 +205,7 @@ async fn proxy_handler(
         },
 
         // A non internal request, but the host header has not been defined
-        (_, _, false, false) => {
+        (_, _, false, None) => {
             debug!("Host header not defined");
             *response.body_mut() = Body::from("Host header not defined");
             *response.status_mut() = StatusCode::NOT_FOUND;
@@ -223,7 +218,7 @@ async fn proxy_handler(
             let backend_location = router(
                 &proxy_config.config.backends,
                 proxy_state.clone(),
-                host_header_str,
+                host_authority.unwrap().clone(),
             );
 
             match backend_location {
@@ -315,7 +310,11 @@ pub async fn run_server(config_path: String) {
 
     let app = Router::new()
         .route(
-            "/*path",
+            "/",
+            get(proxy_handler).post(proxy_handler).put(proxy_handler),
+        )
+        .route(
+            "/{*wildcard}",
             get(proxy_handler).post(proxy_handler).put(proxy_handler),
         )
         .layer(Extension(proxy_config))
@@ -331,9 +330,10 @@ pub async fn run_server(config_path: String) {
 
 #[cfg(test)]
 mod tests {
+    use axum::body::Body;
     use hyper::{
         header::{HOST, PROXY_AUTHENTICATE},
-        Body, Request,
+        Request,
     };
 
     use super::*;
@@ -362,32 +362,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_host_header_match_proxy_address() {
-        // Not host headers
-        let host_header_string = String::from("localhost:4000");
-        let test_match = host_header_set(host_header_string);
-        assert_eq!(test_match, false);
-
-        let host_header_string = String::from("127.0.0.1:4000");
-        let test_match = host_header_set(host_header_string);
-        assert_eq!(test_match, false);
-
-        let host_header_string = String::from("[::1]:4000");
-        let test_match = host_header_set(host_header_string);
-        assert_eq!(test_match, false);
-
-        let host_header_string = String::from("192.168.1.100:1");
-        let test_match = host_header_set(host_header_string);
-        assert_eq!(test_match, false);
-
-        // Is a host header
-        let host_header_string = String::from("test.home");
-        let test_match = host_header_set(host_header_string);
-        assert_eq!(test_match, true);
-    }
-    #[tokio::test]
-    async fn test_get_host_header() {
-        // HTTP 1
+    async fn test_get_host_http1() {
         let request = Request::builder()
             .method("GET")
             .version(Version::HTTP_10)
@@ -395,9 +370,44 @@ mod tests {
             .header(HOST, "test.home")
             .body(Body::from("test"))
             .unwrap();
-        let host_header = get_host_header(&request);
-        assert_eq!(host_header.unwrap(), "test.home");
+        let host = get_host(&request);
+        assert_eq!(host.unwrap(), "test.home");
+    }
 
-        //TODO Test and HTTP2 request
+    #[tokio::test]
+    async fn test_get_host_http1_none() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_10)
+            .uri("https://localhost:4000/test")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_host_http2() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_2)
+            .uri("https://localhost:4000/test")
+            .header(HOST, "test.home")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host.unwrap(), "test.home");
+    }
+
+    #[tokio::test]
+    async fn test_get_host_http2_none() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_2)
+            .uri("https://localhost:4000/test")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host, None);
     }
 }

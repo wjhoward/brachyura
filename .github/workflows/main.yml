@@ -21,4 +21,4 @@ jobs:
           cargo build
       - name: Test
         run: |
-          cargo test --lib
+          cargo test

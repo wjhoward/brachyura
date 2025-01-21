@@ -6,16 +6,19 @@ use super::{Backend, BackendState, ProxyState};
 pub fn router(
     backends_config: &[Backend],
     proxy_state: Arc<Mutex<ProxyState>>,
-    host_header: &str,
+    host_authority: String,
 ) -> Option<String> {
-    // Matches a given host header with a backend
+    // Matches a given host header or authority with a backend
     // Performs load balancing when configured
 
     // Proxy state mutex is unlocked within this function (rather than in calling code)
     // so that the mutex guard goes out of scope once the function completes
-    let backends_state = &mut proxy_state.lock().unwrap().backends;
+    let backends_state = &mut proxy_state
+        .lock()
+        .expect("routing - proxy_state lock error")
+        .backends;
 
-    let backend = match_backend(backends_config, host_header)?;
+    let backend = match_backend(backends_config, host_authority)?;
 
     // Check if load balancing is enabled
     if backend.backend_type.as_deref() == Some("loadbalanced") {
@@ -35,14 +38,14 @@ pub fn router(
     }
 }
 
-fn match_backend<'a>(backends: &'a [Backend], host_header: &str) -> Option<&'a Backend> {
+fn match_backend(backends: &[Backend], host_authority: String) -> Option<&Backend> {
     backends
         .iter()
-        .find(|&backend| backend.name.as_deref() == Some(host_header))
+        .find(|&backend| backend.name.as_deref() == Some(&host_authority))
 }
 
 fn round_robin_select(
-    backend_locations: &Vec<String>,
+    backend_locations: &[String],
     backend_state: &mut BackendState,
 ) -> Option<String> {
     let backend_count = backend_locations.len() as isize;
@@ -75,7 +78,7 @@ mod tests {
 
         let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 
-        let backend = router(&config.backends, proxy_state, "test.home");
+        let backend = router(&config.backends, proxy_state, "test.home".to_string());
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
@@ -86,7 +89,7 @@ mod tests {
             .unwrap();
         let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 
-        let backend = router(&config.backends, proxy_state, "test-lb.home");
+        let backend = router(&config.backends, proxy_state, "test-lb.home".to_string());
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
