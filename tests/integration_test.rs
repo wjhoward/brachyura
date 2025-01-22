@@ -158,7 +158,7 @@ fn test_init() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    thread::sleep(time::Duration::from_millis(100));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
