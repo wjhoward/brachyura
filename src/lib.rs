@@ -256,7 +256,7 @@ async fn proxy_handler(
                     }
 
                     response = proxy_config.client.make_request(req).await;
-                    debug!(
+                    info!(
                         "Proxied response from: {} | Status: {}",
                         uri,
                         response.status()
