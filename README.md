@@ -44,12 +44,9 @@ Multiple backends can be defined for a given host header, where requests to thes
 
 ## Testing
 
-### Library tests
-To run the library / unit tests run: `cargo test --lib`
+### Tests
 
-### Full tests
-
-The full test suite (`cargo test`) requires a TLS key and cert configured and existing at the relative path.
+Unit and integration tests can be run via `cargo test`, test TLS certs are included for the integration tests.
 
 ## Running
 

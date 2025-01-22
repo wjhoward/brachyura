@@ -1,8 +1,16 @@
-use hyper::{client::HttpConnector, http::StatusCode, Body, Request, Response};
-use log::info;
 use std::time::Duration;
+
+use axum::{
+    body::Body,
+    extract::Request,
+    response::{IntoResponse, Response},
+};
+use hyper::StatusCode;
+use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
+use log::info;
 use tokio::time::timeout;
-type HttpClient = hyper::client::Client<HttpConnector, Body>;
+
+type HttpClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
 
 pub struct Client {
     client: HttpClient,
@@ -11,7 +19,9 @@ pub struct Client {
 
 impl Client {
     pub fn new(timeout: Option<u64>) -> Client {
-        let client = HttpClient::new();
+        let client: HttpClient =
+            hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
+                .build(HttpConnector::new());
         Client { client, timeout }
     }
 
@@ -23,40 +33,34 @@ impl Client {
         .await
         {
             Ok(result) => match result {
-                Ok(response) => response,
+                Ok(response) => response.into_response(),
                 Err(e) => {
                     let error_string;
-                    let error_status;
+                    let error_status: StatusCode;
                     if e.is_connect() {
                         error_string = "Cannot connect to backend";
                         error_status = StatusCode::SERVICE_UNAVAILABLE;
-                    } else if e.is_timeout() {
-                        error_string = "Connection timeout";
-                        error_status = StatusCode::GATEWAY_TIMEOUT;
                     } else {
                         error_string = "Unhandled error, see logs";
                         error_status = StatusCode::INTERNAL_SERVER_ERROR;
                         info!("Unhandled error: {:?}", e);
                     }
-                    let mut response = Response::new(error_string.into());
-                    *response.status_mut() = error_status;
-                    response
+                    (error_status, error_string).into_response()
                 }
             },
-            Err(_) => {
-                let mut response = Response::new("Request timeout".into());
-                *response.status_mut() = StatusCode::GATEWAY_TIMEOUT;
-                response
-            }
+            Err(_) => (StatusCode::GATEWAY_TIMEOUT, "Request timeout").into_response(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
     use super::*;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn test_client_make_request_ok() {
@@ -88,7 +92,9 @@ mod tests {
         *request.uri_mut() = format!("{}/delay", &mock_server.uri()).parse().unwrap();
         let response = client.make_request(request).await;
         assert_eq!(response.status(), 504);
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
         assert_eq!(body, "Request timeout");
     }
 }

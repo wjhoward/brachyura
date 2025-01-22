@@ -1,14 +1,19 @@
-use reqwest::header::HOST;
-use reqwest::{Error, Method, Response};
-use std::net::TcpListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
-use std::{thread, time};
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use std::{
+    net::TcpListener,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+    thread, time,
+    time::Duration,
+};
 
 use brachyura::run_server;
+use reqwest::{header::HOST, Error, Method, Response};
+use wiremock::{
+    matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 pub struct MockBackend {
     pub mock_server: Option<MockServer>,
 }
@@ -116,7 +121,9 @@ async fn http_request(
     no_proxy: Option<bool>,
     method: Option<Method>,
 ) -> Result<Response, Error> {
-    let mut client_builder = reqwest::Client::builder().danger_accept_invalid_certs(true);
+    let mut client_builder = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .use_rustls_tls();
     if protocol == "http1" {
         client_builder = client_builder.http1_only();
     } else {
@@ -146,6 +153,14 @@ async fn http_request(
     }
 }
 
+fn test_init() {
+    // Common test initialization
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Sleep this thread while the server starts up
+    thread::sleep(time::Duration::from_millis(1000));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_get() {
     MOCK_BACKEND
@@ -154,14 +169,12 @@ async fn http1_get() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -182,12 +195,10 @@ async fn http1_get_no_host_header() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http1", "https://localhost:4000/test", None, None, None).await;
+    let resp = http_request("http1", "https://127.0.0.1:4000/test", None, None, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
@@ -203,14 +214,12 @@ async fn http1_get_no_proxy_header_status() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send an internal /status request
     let resp = http_request(
         "http1",
-        "https://localhost:4000/status",
+        "https://127.0.0.1:4000/status",
         None,
         Some(true),
         None,
@@ -231,14 +240,12 @@ async fn http1_get_no_proxy_header_metrics() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to ensure metrics exist
     let _ = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -248,7 +255,7 @@ async fn http1_get_no_proxy_header_metrics() {
     // Send an internal /metrics request
     let resp = http_request(
         "http1",
-        "https://localhost:4000/metrics",
+        "https://127.0.0.1:4000/metrics",
         None,
         Some(true),
         None,
@@ -271,14 +278,12 @@ async fn http1_head() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::HEAD),
@@ -299,14 +304,12 @@ async fn http1_post() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::POST),
@@ -327,14 +330,12 @@ async fn http1_put() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::PUT),
@@ -355,14 +356,12 @@ async fn http2_get() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -383,12 +382,10 @@ async fn http2_get_no_host_header() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http2", "https://localhost:4000/test", None, None, None).await;
+    let resp = http_request("http2", "https://127.0.0.1:4000/test", None, None, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
@@ -404,14 +401,12 @@ async fn http2_get_no_proxy_header_status() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send an internal /status request
     let resp = http_request(
         "http2",
-        "https://localhost:4000/status",
+        "https://127.0.0.1:4000/status",
         None,
         Some(true),
         None,
@@ -432,14 +427,12 @@ async fn http2_get_no_proxy_header_metrics() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to ensure metrics exist
     let _ = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         None,
@@ -449,7 +442,7 @@ async fn http2_get_no_proxy_header_metrics() {
     // Send an internal /metrics request
     let resp = http_request(
         "http2",
-        "https://localhost:4000/metrics",
+        "https://127.0.0.1:4000/metrics",
         None,
         Some(true),
         None,
@@ -472,14 +465,12 @@ async fn http2_head() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::HEAD),
@@ -500,14 +491,12 @@ async fn http2_post() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::POST),
@@ -528,14 +517,12 @@ async fn http2_put() {
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
         "http2",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test.home"),
         None,
         Some(Method::PUT),
@@ -561,14 +548,12 @@ async fn load_balancing_round_robin() {
         .init("127.0.0.1:8001", "This is the mock backend 2!")
         .await;
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Response from the first mock backend
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test-lb.home"),
         None,
         None,
@@ -580,7 +565,7 @@ async fn load_balancing_round_robin() {
     // Response from the second mock backend
     let resp = http_request(
         "http1",
-        "https://localhost:4000/test",
+        "https://127.0.0.1:4000/test",
         Some("test-lb.home"),
         None,
         None,
@@ -594,14 +579,12 @@ async fn load_balancing_round_robin() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn proxied_backend_timeout() {
     let proxy_parent = start_proxy();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(1000));
+    test_init();
 
     // Send a request which will timeout
     let resp = http_request(
         "http1",
-        "https://localhost:4000/delay",
+        "https://127.0.0.1:4000/delay",
         Some("test.home"),
         None,
         None,
