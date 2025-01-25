@@ -1,12 +1,4 @@
-use std::{
-    net::TcpListener,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
-    },
-    thread, time,
-    time::Duration,
-};
+use std::{net::TcpListener, sync::Mutex, thread, time, time::Duration};
 
 use brachyura::run_server;
 use reqwest::{header::HOST, Error, Method, Response};
@@ -60,45 +52,6 @@ impl MockBackend {
 
 static MOCK_BACKEND: Mutex<MockBackend> = Mutex::new(MockBackend::new());
 static MOCK_BACKEND2: Mutex<MockBackend> = Mutex::new(MockBackend::new());
-static PROXY_STARTED: Mutex<bool> = Mutex::new(false);
-static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-fn finish(proxy_parent: bool) {
-    TEST_COUNTER.fetch_sub(1, Ordering::SeqCst);
-    let mut limit = 0; // Prevents an infinite loop if a test thread panics
-    if proxy_parent {
-        // If dependent tests are still running wait
-        while TEST_COUNTER.load(Ordering::SeqCst) != 0 {
-            if limit > 25 {
-                break;
-            }
-            thread::sleep(time::Duration::from_millis(100));
-            limit += 1;
-        }
-    }
-}
-
-fn start_proxy() -> bool {
-    // Track the number of dependant tests, plus the parent thread
-    TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let parent;
-
-    // Get the mutex guard/lock until proxy_started goes out of scope
-    let mut proxy_started = PROXY_STARTED.lock().unwrap();
-
-    if !*proxy_started {
-        parent = true;
-        *proxy_started = true;
-        tokio::spawn(async move {
-            let config_path = String::from("./tests/config.yaml");
-            run_server(config_path).await;
-        });
-    } else {
-        // Proxy already running, not started by this thread
-        parent = false;
-    }
-    parent
-}
 
 async fn assert_response(
     resp: Result<Response, Error>,
@@ -154,7 +107,12 @@ async fn http_request(
 }
 
 fn test_init() {
-    // Common test initialization
+    // Start the proxy
+    tokio::spawn(async move {
+        let config_path = String::from("./tests/config.yaml");
+        run_server(config_path).await;
+    });
+
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Sleep this thread while the server starts up
@@ -168,7 +126,7 @@ async fn http1_get() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -183,8 +141,6 @@ async fn http1_get() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, Some("This is the mock backend!")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -194,7 +150,7 @@ async fn http1_get_no_host_header() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy without a host header
@@ -202,8 +158,6 @@ async fn http1_get_no_host_header() {
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -213,7 +167,7 @@ async fn http1_get_no_proxy_header_status() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send an internal /status request
@@ -228,8 +182,6 @@ async fn http1_get_no_proxy_header_status() {
 
     // In this case the proxy should respond with a 200
     assert_response(resp, 200, Some("The proxy is running")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -239,7 +191,7 @@ async fn http1_get_no_proxy_header_metrics() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to ensure metrics exist
@@ -266,8 +218,6 @@ async fn http1_get_no_proxy_header_metrics() {
     let body = response.bytes().await.unwrap();
     assert_eq!(status, 200);
     assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -277,7 +227,7 @@ async fn http1_head() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -292,8 +242,6 @@ async fn http1_head() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, None).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -303,7 +251,7 @@ async fn http1_post() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -318,8 +266,6 @@ async fn http1_post() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, None).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -329,7 +275,7 @@ async fn http1_put() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -344,8 +290,6 @@ async fn http1_put() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, None).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -355,7 +299,7 @@ async fn http2_get() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -370,8 +314,6 @@ async fn http2_get() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, Some("This is the mock backend!")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -381,7 +323,7 @@ async fn http2_get_no_host_header() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy without a host header
@@ -389,8 +331,6 @@ async fn http2_get_no_host_header() {
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -400,7 +340,7 @@ async fn http2_get_no_proxy_header_status() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send an internal /status request
@@ -415,8 +355,6 @@ async fn http2_get_no_proxy_header_status() {
 
     // In this case the proxy should respond with a 200
     assert_response(resp, 200, Some("The proxy is running")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -426,7 +364,7 @@ async fn http2_get_no_proxy_header_metrics() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to ensure metrics exist
@@ -453,8 +391,6 @@ async fn http2_get_no_proxy_header_metrics() {
     let body = response.bytes().await.unwrap();
     assert_eq!(status, 200);
     assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -464,7 +400,7 @@ async fn http2_head() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -479,8 +415,6 @@ async fn http2_head() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, None).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -490,7 +424,7 @@ async fn http2_post() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -505,8 +439,6 @@ async fn http2_post() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, None).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -516,7 +448,7 @@ async fn http2_put() {
         .unwrap()
         .init("127.0.0.1:8000", "This is the mock backend!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Send a request to the proxy, which should be forwarded to the mock server
@@ -531,8 +463,6 @@ async fn http2_put() {
 
     // In this case the response should be a 200 from the mock backend
     assert_response(resp, 200, None).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -547,7 +477,7 @@ async fn load_balancing_round_robin() {
         .unwrap()
         .init("127.0.0.1:8001", "This is the mock backend 2!")
         .await;
-    let proxy_parent = start_proxy();
+
     test_init();
 
     // Response from the first mock backend
@@ -572,13 +502,10 @@ async fn load_balancing_round_robin() {
     )
     .await;
     assert_response(resp, 200, Some("This is the mock backend 2!")).await;
-
-    finish(proxy_parent);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn proxied_backend_timeout() {
-    let proxy_parent = start_proxy();
     test_init();
 
     // Send a request which will timeout
@@ -592,6 +519,4 @@ async fn proxied_backend_timeout() {
     .await;
     // In this case the proxy should respond with a 504
     assert_response(resp, 504, Some("Request timeout")).await;
-
-    finish(proxy_parent);
 }
