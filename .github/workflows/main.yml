@@ -15,7 +15,9 @@ jobs:
       matrix:
         os: [ubuntu-20.04, macos-latest]
     steps:
-      - uses: actions/checkout@v3
-      - name: Test
+      - uses: actions/checkout@v4
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Tests with coverage
         run: |
-          RUST_LOG=info cargo test
+          cargo llvm-cov --show-missing-lines --fail-under-lines=90 --ignore-filename-regex=main.rs -- --test-threads=1

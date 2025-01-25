@@ -18,7 +18,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
 use hyper::http::{header, HeaderName};
-use log::{debug, info, warn};
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
 mod client;
@@ -256,10 +256,11 @@ async fn proxy_handler(
                     }
 
                     response = proxy_config.client.make_request(req).await;
-                    info!(
-                        "Proxied response from: {} | Status: {}",
+                    debug!(
+                        "Proxied response from: {} | Status: {} | Response headers: {:?}",
                         uri,
-                        response.status()
+                        response.status(),
+                        response.headers()
                     );
                     // Record metrics
                     if let Err(e) = record_metrics(&response, backend_location, start.elapsed()) {
@@ -269,12 +270,11 @@ async fn proxy_handler(
             }
         }
     };
-    debug!("Response headers: {:?}", response.headers());
     Ok(response)
 }
 
 pub async fn run_server(config_path: String) {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
 
     let config = read_proxy_config_yaml(config_path)
         .await
@@ -319,8 +319,6 @@ pub async fn run_server(config_path: String) {
         )
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
-
-    info!("Reverse proxy listening on {}", listen_address);
 
     axum_server::bind_rustls(listen_address, tls_config)
         .serve(app.into_make_service())

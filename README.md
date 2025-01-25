@@ -46,7 +46,7 @@ Multiple backends can be defined for a given host header, where requests to thes
 
 ### Tests
 
-Unit and integration tests can be run via `cargo test`, test TLS certs are included for the integration tests.
+Unit and integration tests can be run via `cargo test -- --test-threads=1`, single thread mode is required for the integration tests.
 
 ## Running
 
