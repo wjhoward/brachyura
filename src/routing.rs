@@ -118,4 +118,25 @@ mod tests {
         let fifth_backend = round_robin_select(backend_locations, backend_state).unwrap();
         assert_eq!(fifth_backend, String::from("127.0.0.1:8000"));
     }
+
+    #[tokio::test]
+    async fn test_invalid_backend_config() {
+        let config = read_proxy_config_yaml("tests/config.yaml".to_string())
+            .await
+            .unwrap();
+        let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
+
+        let backend = router(
+            &config.backends,
+            proxy_state.clone(),
+            "invalid_backend_1".to_string(),
+        );
+        assert_eq!(backend, None);
+        let backend = router(
+            &config.backends,
+            proxy_state,
+            "invalid_backend_2".to_string(),
+        );
+        assert_eq!(backend, None);
+    }
 }

@@ -408,4 +408,15 @@ mod tests {
         let host = get_host(&request);
         assert_eq!(host, None);
     }
+
+    #[tokio::test]
+    async fn test_bad_request_handler() {
+        let original_response = Response::new(Body::from("test"));
+        let response = bad_request_handler(original_response, "test error".to_string());
+        assert_eq!(response.status(), 400);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(body, "test error");
+    }
 }
