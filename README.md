@@ -88,3 +88,6 @@ This is the Python origin server, listening on port: 10000 request HTTP version:
 ```
 
 You will notice that the origin server reports an HTTP 1.1 protocol, this is due to the code currently downgrading the downstream connection, see the code for more details.
+
+### Local environment
+Included in the repo is a Prometheus/Grafana configured environment, which can be started (in addition to the proxy) via the `start_local_run.sh` script.
