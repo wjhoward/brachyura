@@ -17,6 +17,7 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
+use hyper::http::header::CONTENT_TYPE;
 use hyper::http::{header, HeaderName};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -196,6 +197,9 @@ async fn proxy_handler(
         (&Method::GET, "/metrics", true, _) => match encode_metrics() {
             Ok(encoded_metrics) => {
                 *response.body_mut() = Body::from(encoded_metrics);
+                response
+                    .headers_mut()
+                    .insert(CONTENT_TYPE, "text/plain; charset=utf-8".parse().unwrap());
             }
             Err(e) => {
                 warn!("Error encoding metrics: {e}");
