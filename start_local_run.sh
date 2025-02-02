@@ -3,5 +3,6 @@ function sigint_handler() {
 }
 trap "sigint_handler" 2
 
+docker compose -f utilities/local_run/docker-compose.yaml build
 docker compose -f utilities/local_run/docker-compose.yaml up -d
 cargo run
