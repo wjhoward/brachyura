@@ -19,7 +19,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
 use hyper::http::header::CONTENT_TYPE;
 use hyper::http::{header, HeaderName};
-use log::{debug, warn};
+use log::{debug, warn, info};
 use serde::{Deserialize, Serialize};
 
 mod client;
@@ -61,6 +61,7 @@ pub struct Backend {
     extras: HashMap<String, String>,
 }
 
+#[derive(Debug)]
 struct ProxyConfig {
     config: Config,
     client: Client,
@@ -323,6 +324,8 @@ pub async fn run_server(config_path: String) {
         )
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
+
+    info!("proxy listening on {}", listen_address);
 
     axum_server::bind_rustls(listen_address, tls_config)
         .serve(app.into_make_service())

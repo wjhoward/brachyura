@@ -1,0 +1,36 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: prometheus
+    command: --config.file=/etc/prometheus/prometheus.yaml --log.level=warn
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus:/etc/prometheus
+  grafana:
+    image: grafana/grafana:11.5.0-ubuntu
+    container_name: grafana
+    ports:
+      - 3000:3000
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=password
+      - GF_LOG_LEVEL=warn
+    volumes:
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+  backend:
+    build: ./backend
+    container_name: backend
+    ports:
+      - 10000:10000
+    environment:
+      - PORT=10000
+  backend_slow:
+    build: ./backend
+    container_name: backend_slow
+    ports:
+      - 10001:10001
+    environment:
+      - PORT=10001
+      - SLOW=true

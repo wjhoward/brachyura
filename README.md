@@ -1,12 +1,23 @@
-# Brachyura 
-![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
+# Brachyura
 
-A TLS terminating, load balancing reverse proxy, which I am primarily using as a Rust learning project. **Currently an experimental work in progress project.**
+A TLS terminating, load balancing reverse proxy, which I am using as a Rust learning project. **An experimental work in progress project.**
 
 I utilize Nginx as part of my home lab providing reverse proxy functionality as well as TLS termination. The idea of this project is to replace Nginx with a light weight Rust based reverse proxy. Configurable via a yaml config file.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![ci-status](https://github.com/wjhoward/brachyura/actions/workflows/main.yml/badge.svg)
 
+## Quick Start
+The repo contains a local [docker compose](https://github.com/docker/compose) based environment with example backend services, [Prometheus](https://github.com/prometheus/prometheus
+) and [Grafana](https://github.com/grafana/grafana
+) (for monitoring), all pre configured and including a Grafana dashboard.
+
+Running `./local_run.sh` will start up the containers and run the proxy:
+
+![local_run](local_run.jpeg)
+
+You can then send traffic to the load balanced backends via:
+`curl -H "Host: test-lb.home" https://127.0.0.1:4000/ --insecure`
 
 ---
 ## Configuration
@@ -88,6 +99,3 @@ This is the Python origin server, listening on port: 10000 request HTTP version:
 ```
 
 You will notice that the origin server reports an HTTP 1.1 protocol, this is due to the code currently downgrading the downstream connection, see the code for more details.
-
-### Local environment
-Included in the repo is a Prometheus/Grafana configured environment, which can be started (in addition to the proxy) via the `start_local_run.sh` script.
