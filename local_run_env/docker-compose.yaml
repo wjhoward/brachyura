@@ -19,9 +19,9 @@ services:
     volumes:
       - ./grafana/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
-  backend_normal:
+  backend:
     build: ./backend
-    container_name: backend_normal
+    container_name: backend
     ports:
       - 10000:10000
     environment:
