@@ -2,12 +2,12 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     env,
-    net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
+    net::{IpAddr, SocketAddr, SocketAddrV4},
     sync::{Arc, Mutex},
     time::Instant,
 };
 
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use axum::{
     body::Body,
     extract::Extension,
@@ -17,9 +17,12 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use env_logger::Env;
-use hyper::http::header::CONTENT_TYPE;
-use hyper::http::{header, HeaderName};
-use log::{debug, warn, info};
+use hyper::http::{
+    header,
+    header::{CONTENT_TYPE, HOST},
+    HeaderName,
+};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 
 mod client;
@@ -106,13 +109,22 @@ async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config, serde_yaml:
     Ok(deserialized)
 }
 
-async fn adjust_proxied_headers(req: &mut Request<Body>) -> Result<(), Error> {
+async fn adjust_proxied_headers(
+    req: &mut Request<Body>,
+    host_authority: Option<String>,
+) -> Result<(), Error> {
     // Adjust headers for a request which is being proxied downstream
 
     // Remove hop by hop headers
     for h in HOP_BY_HOP_HEADERS {
         req.headers_mut().remove(h.to_string());
     }
+
+    //Append a host header
+    req.headers_mut().insert(
+        HOST,
+        HeaderValue::from_str(&host_authority.context("unexpected missing host_authority")?)?,
+    );
 
     // Append a no-proxy header to avoid loops
     req.headers_mut()
@@ -128,17 +140,23 @@ fn get_host(req: &Request<Body>) -> Option<String> {
         Some(header) => header.to_str().ok().map(|s| s.to_string()),
         _ => req.uri().authority().map(|authority| authority.to_string()),
     };
+    // Parse the HTTP authority, removing port numbers
+    let ip_or_host = host.clone().unwrap_or("".to_string());
+    let ip_or_host_no_port = ip_or_host.split(":").next().map(|s| s.to_string());
 
-    // The host could be an IP address, which we don't regard as a host for the purpose of proxying
-    if host
-        .clone()
-        .unwrap_or("".to_string())
-        .to_socket_addrs()
-        .is_ok()
-    {
+    // If the authority is "localhost" or an IP address, it's not a host for the purpose of proxying
+    if ip_or_host_no_port == Some("localhost".to_string()) {
         return None;
     }
-    host
+    let ipv4: Option<IpAddr> = ip_or_host_no_port
+        .clone()
+        .unwrap_or("".to_string())
+        .parse()
+        .ok();
+    if ipv4.is_some() {
+        return None;
+    }
+    ip_or_host_no_port
 }
 
 fn bad_request_handler(mut response: Response<Body>, message: String) -> Response<Body> {
@@ -219,11 +237,12 @@ async fn proxy_handler(
         // Proxy the request
         _ => {
             debug!("Standard request proxy");
-
             let backend_location = router(
                 &proxy_config.config.backends,
                 proxy_state.clone(),
-                host_authority.unwrap().clone(),
+                host_authority
+                    .clone()
+                    .expect("unexpected missing host_authority"),
             );
 
             match backend_location {
@@ -250,7 +269,7 @@ async fn proxy_handler(
 
                     // Simply take the existing request and mutate the uri and headers
                     *req.uri_mut() = uri.clone();
-                    adjust_proxied_headers(&mut req)
+                    adjust_proxied_headers(&mut req, host_authority)
                         .await
                         .expect("Unable to adjust headers");
 
@@ -259,7 +278,6 @@ async fn proxy_handler(
                     if scheme == "http" {
                         *req.version_mut() = Version::HTTP_11;
                     }
-
                     response = proxy_config.client.make_request(req).await;
                     debug!(
                         "Proxied response from: {} | Status: {} | Response headers: {:?}",
@@ -345,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_config_yaml() {
-        let data = read_proxy_config_yaml("config.yaml".to_string())
+        let data = read_proxy_config_yaml("tests/config.yaml".to_string())
             .await
             .unwrap();
         assert_eq!(
@@ -360,7 +378,9 @@ mod tests {
         req.headers_mut().insert(HOST, "test_host".parse().unwrap());
         req.headers_mut()
             .insert(PROXY_AUTHENTICATE, "true".parse().unwrap());
-        adjust_proxied_headers(&mut req).await.unwrap();
+        adjust_proxied_headers(&mut req, Some("test".to_string()))
+            .await
+            .unwrap();
         assert!(req.headers().iter().count() == 2);
         assert!(req.headers().contains_key(HOST));
         assert!(req.headers().contains_key("x-no-proxy"));

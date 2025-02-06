@@ -7,12 +7,12 @@ tls:
 timeout: 1000
 
 backends:
-  - name: "test.home"
-    location: "127.0.0.1:8000"
-  - name: "origin.home"
+  - name: "prometheus.home"
+    location: "127.0.0.1:9090"
+  - name: "grafana.home"
+    location: "127.0.0.1:3000"
+  - name: "backend.home"
     location: "127.0.0.1:10000"
-  - name: "pihole.home"
-    location: "192.168.1.250"
   - name: "test-lb.home"
     backend_type: "loadbalanced"
     locations:
