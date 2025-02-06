@@ -19,7 +19,15 @@ Running `./local_run.sh` will start up the containers and run the proxy:
 You can then send traffic to the load balanced backends via:
 `curl -H "Host: test-lb.home" https://127.0.0.1:4000/ --insecure`
 
----
+To access Grafana/Prometheus via the proxy you need to override your host header, the simplest way is to add both to your hosts file:
+```
+127.0.0.1 grafana.home
+127.0.0.1 prometheus.home
+```
+
+Then browse to `https://prometheus.home:4000/` or `https://grafana.home:4000/`. There will be a certificate error as this is configured to use the example self signed certs in the repo.
+
+
 ## Configuration
 Configured in `config.yaml`
 
