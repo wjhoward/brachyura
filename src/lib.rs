@@ -4,7 +4,6 @@ use std::{
     env,
     net::{IpAddr, SocketAddr, SocketAddrV4},
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use anyhow::{Context, Error, Result};
@@ -12,6 +11,7 @@ use axum::{
     body::Body,
     extract::Extension,
     http::{uri::Uri, HeaderValue, Method, Request, Response, StatusCode, Version},
+    middleware,
     routing::get,
     Router,
 };
@@ -103,6 +103,11 @@ impl ProxyState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ResponseContext {
+    backend_location: String,
+}
+
 async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config, serde_yaml::Error> {
     let deserialized: Config =
         serde_yaml::from_reader(std::fs::File::open(yaml_path).expect("Unable to read config"))?;
@@ -170,7 +175,6 @@ async fn proxy_handler(
     Extension(proxy_state): Extension<Arc<Mutex<ProxyState>>>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
-    let start = Instant::now();
     let mut response = Response::new(Body::empty());
 
     debug!(
@@ -245,7 +249,7 @@ async fn proxy_handler(
                     .expect("unexpected missing host_authority"),
             );
 
-            match backend_location {
+            match backend_location.clone() {
                 None => {
                     *response.status_mut() = StatusCode::NOT_FOUND;
                 }
@@ -285,12 +289,12 @@ async fn proxy_handler(
                         response.status(),
                         response.headers()
                     );
-                    // Record metrics
-                    if let Err(e) = record_metrics(&response, backend_location, start.elapsed()) {
-                        warn!("Error recording metrics: {e}")
-                    };
                 }
             }
+            let context = ResponseContext {
+                backend_location: backend_location.unwrap_or("undefined".to_string()),
+            };
+            response.extensions_mut().insert(context);
         }
     };
     Ok(response)
@@ -340,6 +344,7 @@ pub async fn run_server(config_path: String) {
             "/{*wildcard}",
             get(proxy_handler).post(proxy_handler).put(proxy_handler),
         )
+        .route_layer(middleware::from_fn(record_metrics))
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
 

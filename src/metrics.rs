@@ -1,13 +1,14 @@
-use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Error;
-use axum::body::Body;
-use hyper::http::Response;
+use axum::{extract::Request, middleware::Next, response::IntoResponse};
 use once_cell::sync::Lazy;
 use prometheus::{
     self, register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec, IntCounterVec,
     TextEncoder,
 };
+
+use crate::ResponseContext;
 
 pub static METRICS: Lazy<Metrics> = Lazy::new(Metrics::new);
 
@@ -44,21 +45,30 @@ pub fn encode_metrics() -> Result<String, Error> {
     Ok(String::from_utf8(buffer.clone())?)
 }
 
-pub fn record_metrics(
-    response: &Response<Body>,
-    backend_location: String,
-    duration: Duration,
-) -> Result<(), Error> {
-    METRICS
-        .http_request_counter
-        .with_label_values(&[response.status().as_str(), backend_location.as_str()])
-        .inc_by(1);
+pub async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
+    let start = Instant::now();
 
-    METRICS
-        .http_request_duration
-        .with_label_values(&[response.status().as_str(), backend_location.as_str()])
-        .observe(duration.as_secs_f64());
-    Ok(())
+    let response = next.run(req).await;
+
+    if let Some(response_context) = response.extensions().get::<ResponseContext>() {
+        let duration = start.elapsed();
+        METRICS
+            .http_request_counter
+            .with_label_values(&[
+                response.status().as_str(),
+                &response_context.backend_location,
+            ])
+            .inc_by(1);
+
+        METRICS
+            .http_request_duration
+            .with_label_values(&[
+                response.status().as_str(),
+                &response_context.backend_location,
+            ])
+            .observe(duration.as_secs_f64());
+    }
+    response
 }
 
 mod tests {
@@ -90,20 +100,5 @@ mod tests {
             "# HELP http_request_total Number of http requests received\n\
                 # TYPE http_request_total counter\nhttp_request_total"
         ));
-    }
-
-    #[tokio::test]
-    async fn test_record_metrics() {
-        let response = Response::builder().body(Body::from("test")).unwrap();
-        assert_eq!(
-            record_metrics(
-                &response,
-                "127.0.0.1:10000".to_string(),
-                Duration::from_micros(10)
-            )
-            .is_ok(),
-            true
-        );
-        assert!(encode_metrics().unwrap().contains("127.0.0.1:10000"));
     }
 }
