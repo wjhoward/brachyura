@@ -249,7 +249,7 @@ async fn proxy_handler(
                     .expect("unexpected missing host_authority"),
             );
 
-            match backend_location.clone() {
+            match backend_location {
                 None => {
                     *response.status_mut() = StatusCode::NOT_FOUND;
                 }
