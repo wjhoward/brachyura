@@ -4,7 +4,6 @@ use std::{
     env,
     net::{IpAddr, SocketAddr, SocketAddrV4},
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use anyhow::{Context, Error, Result};
@@ -12,6 +11,7 @@ use axum::{
     body::Body,
     extract::Extension,
     http::{uri::Uri, HeaderValue, Method, Request, Response, StatusCode, Version},
+    middleware,
     routing::get,
     Router,
 };
@@ -103,6 +103,11 @@ impl ProxyState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ResponseContext {
+    backend_location: String,
+}
+
 async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config, serde_yaml::Error> {
     let deserialized: Config =
         serde_yaml::from_reader(std::fs::File::open(yaml_path).expect("Unable to read config"))?;
@@ -141,7 +146,7 @@ fn get_host(req: &Request<Body>) -> Option<String> {
         _ => req.uri().authority().map(|authority| authority.to_string()),
     };
     // Parse the HTTP authority, removing port numbers
-    let ip_or_host = host.clone().unwrap_or("".to_string());
+    let ip_or_host = host.clone().unwrap_or_else(|| "".to_string());
     let ip_or_host_no_port = ip_or_host.split(":").next().map(|s| s.to_string());
 
     // If the authority is "localhost" or an IP address, it's not a host for the purpose of proxying
@@ -150,7 +155,7 @@ fn get_host(req: &Request<Body>) -> Option<String> {
     }
     let ipv4: Option<IpAddr> = ip_or_host_no_port
         .clone()
-        .unwrap_or("".to_string())
+        .unwrap_or_else(|| "".to_string())
         .parse()
         .ok();
     if ipv4.is_some() {
@@ -170,7 +175,6 @@ async fn proxy_handler(
     Extension(proxy_state): Extension<Arc<Mutex<ProxyState>>>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
-    let start = Instant::now();
     let mut response = Response::new(Body::empty());
 
     debug!(
@@ -285,10 +289,9 @@ async fn proxy_handler(
                         response.status(),
                         response.headers()
                     );
-                    // Record metrics
-                    if let Err(e) = record_metrics(&response, backend_location, start.elapsed()) {
-                        warn!("Error recording metrics: {e}")
-                    };
+                    response
+                        .extensions_mut()
+                        .insert(ResponseContext { backend_location });
                 }
             }
         }
@@ -340,6 +343,7 @@ pub async fn run_server(config_path: String) {
             "/{*wildcard}",
             get(proxy_handler).post(proxy_handler).put(proxy_handler),
         )
+        .route_layer(middleware::from_fn(record_metrics))
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
 

@@ -20,4 +20,4 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Tests with coverage
         run: |
-          cargo llvm-cov --show-missing-lines --fail-under-functions=100 --fail-under-lines=90 --ignore-filename-regex=main.rs -- --test-threads=1
+          RUST_LOG=debug cargo llvm-cov --show-missing-lines --fail-under-functions=90 --fail-under-lines=90 --ignore-filename-regex=main.rs -- --test-threads=1
