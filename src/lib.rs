@@ -146,7 +146,7 @@ fn get_host(req: &Request<Body>) -> Option<String> {
         _ => req.uri().authority().map(|authority| authority.to_string()),
     };
     // Parse the HTTP authority, removing port numbers
-    let ip_or_host = host.clone().unwrap_or("".to_string());
+    let ip_or_host = host.clone().unwrap_or_else(|| "".to_string());
     let ip_or_host_no_port = ip_or_host.split(":").next().map(|s| s.to_string());
 
     // If the authority is "localhost" or an IP address, it's not a host for the purpose of proxying
@@ -155,7 +155,7 @@ fn get_host(req: &Request<Body>) -> Option<String> {
     }
     let ipv4: Option<IpAddr> = ip_or_host_no_port
         .clone()
-        .unwrap_or("".to_string())
+        .unwrap_or_else(|| "".to_string())
         .parse()
         .ok();
     if ipv4.is_some() {
@@ -289,12 +289,11 @@ async fn proxy_handler(
                         response.status(),
                         response.headers()
                     );
+                    response
+                        .extensions_mut()
+                        .insert(ResponseContext { backend_location });
                 }
             }
-            let context = ResponseContext {
-                backend_location: backend_location.unwrap_or("undefined".to_string()),
-            };
-            response.extensions_mut().insert(context);
         }
     };
     Ok(response)
