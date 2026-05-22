@@ -28,7 +28,7 @@ impl Client {
 
     pub async fn make_request(&self, req: Request<Body>) -> Response<Body> {
         match timeout(
-            Duration::from_millis(self.timeout.unwrap_or(60)),
+            Duration::from_millis(self.timeout.unwrap_or(60_000)),
             self.client.request(req),
         )
         .await

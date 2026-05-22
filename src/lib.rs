@@ -60,8 +60,6 @@ pub struct Backend {
     location: Option<String>,
     backend_type: Option<String>,
     locations: Option<Vec<String>>,
-    #[serde(flatten)]
-    extras: HashMap<String, String>,
 }
 
 #[derive(Debug)]
