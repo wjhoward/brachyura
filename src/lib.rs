@@ -106,15 +106,16 @@ pub struct ResponseContext {
     backend_location: String,
 }
 
-async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config, serde_yaml::Error> {
-    let deserialized: Config =
-        serde_yaml::from_reader(std::fs::File::open(yaml_path).expect("Unable to read config"))?;
+async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config> {
+    let file = std::fs::File::open(&yaml_path)
+        .with_context(|| format!("Unable to open config file: {yaml_path}"))?;
+    let deserialized: Config = serde_yaml::from_reader(file)?;
     Ok(deserialized)
 }
 
 async fn adjust_proxied_headers(
     req: &mut Request<Body>,
-    host_authority: Option<String>,
+    host_authority: String,
 ) -> Result<(), Error> {
     // Adjust headers for a request which is being proxied downstream
 
@@ -123,11 +124,9 @@ async fn adjust_proxied_headers(
         req.headers_mut().remove(h.to_string());
     }
 
-    //Append a host header
-    req.headers_mut().insert(
-        HOST,
-        HeaderValue::from_str(&host_authority.context("unexpected missing host_authority")?)?,
-    );
+    // Append a host header
+    req.headers_mut()
+        .insert(HOST, HeaderValue::from_str(&host_authority)?);
 
     // Append a no-proxy header to avoid loops
     req.headers_mut()
@@ -218,9 +217,10 @@ async fn proxy_handler(
         (&Method::GET, "/metrics", true, _) => match encode_metrics() {
             Ok(encoded_metrics) => {
                 *response.body_mut() = Body::from(encoded_metrics);
-                response
-                    .headers_mut()
-                    .insert(CONTENT_TYPE, "text/plain; charset=utf-8".parse().unwrap());
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
             }
             Err(e) => {
                 warn!("Error encoding metrics: {e}");
@@ -228,6 +228,11 @@ async fn proxy_handler(
                 *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             }
         },
+
+        // x-no-proxy request to an unknown internal path
+        (_, _, true, _) => {
+            *response.status_mut() = StatusCode::NOT_FOUND;
+        }
 
         // A non internal request, but the host header has not been defined
         (_, _, false, None) => {
@@ -237,14 +242,12 @@ async fn proxy_handler(
         }
 
         // Proxy the request
-        _ => {
+        (_, _, false, Some(host)) => {
             debug!("Standard request proxy");
             let backend_location = router(
                 &proxy_config.config.backends,
                 proxy_state.clone(),
-                host_authority
-                    .clone()
-                    .expect("unexpected missing host_authority"),
+                host.clone(),
             );
 
             match backend_location {
@@ -257,23 +260,34 @@ async fn proxy_handler(
                     // Scheme currently hardcoded to http (given this is a TLS terminating proxy)
                     let scheme = "http";
 
-                    let uri = Uri::builder()
+                    // Default to "/" if the URI has no path component
+                    let path_and_query = req
+                        .uri()
+                        .path_and_query()
+                        .map(|pq| pq.as_str())
+                        .unwrap_or("/");
+
+                    let uri = match Uri::builder()
                         .scheme(scheme)
                         .authority(backend_location.clone())
-                        .path_and_query(
-                            req.uri()
-                                .path_and_query()
-                                .expect("Unable to extract path and query")
-                                .clone(),
-                        )
+                        .path_and_query(path_and_query)
                         .build()
-                        .expect("Unable to extract URI");
+                    {
+                        Ok(uri) => uri,
+                        Err(e) => {
+                            warn!("Failed to build backend URI: {e}");
+                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                            return Ok(response);
+                        }
+                    };
 
                     // Simply take the existing request and mutate the uri and headers
                     *req.uri_mut() = uri.clone();
-                    adjust_proxied_headers(&mut req, host_authority)
-                        .await
-                        .expect("Unable to adjust headers");
+                    if let Err(e) = adjust_proxied_headers(&mut req, host).await {
+                        warn!("Failed to adjust proxy headers: {e}");
+                        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                        return Ok(response);
+                    }
 
                     // If the backend scheme is http, adjust the original request HTTP version to 1
                     // (It seems that the HTTP2 implementation requires TLS)
@@ -297,12 +311,10 @@ async fn proxy_handler(
     Ok(response)
 }
 
-pub async fn run_server(config_path: String) {
+pub async fn run_server(config_path: String) -> Result<()> {
     let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
 
-    let config = read_proxy_config_yaml(config_path)
-        .await
-        .expect("Error loading yaml proxy config");
+    let config = read_proxy_config_yaml(config_path).await?;
 
     let listen_address = SocketAddr::from(config.listen);
 
@@ -312,25 +324,25 @@ pub async fn run_server(config_path: String) {
 
     let proxy_config = Arc::new(ProxyConfig::new(config, client));
 
-    let current_dir = env::current_dir().unwrap();
+    let current_dir = env::current_dir().context("Unable to determine current directory")?;
     let tls_config = RustlsConfig::from_pem_file(
         current_dir.join(
             proxy_config
                 .config
                 .tls
                 .get("cert_path")
-                .expect("Unable to read cert_path"),
+                .context("Unable to read cert_path from config")?,
         ),
         current_dir.join(
             proxy_config
                 .config
                 .tls
                 .get("key_path")
-                .expect("Unable to read key_path"),
+                .context("Unable to read key_path from config")?,
         ),
     )
     .await
-    .expect("TLS config error");
+    .context("Failed to load TLS config")?;
 
     let app = Router::new()
         .route(
@@ -350,7 +362,9 @@ pub async fn run_server(config_path: String) {
     axum_server::bind_rustls(listen_address, tls_config)
         .serve(app.into_make_service())
         .await
-        .expect("Error starting axum server");
+        .context("Server error")?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -380,7 +394,7 @@ mod tests {
         req.headers_mut().insert(HOST, "test_host".parse().unwrap());
         req.headers_mut()
             .insert(PROXY_AUTHENTICATE, "true".parse().unwrap());
-        adjust_proxied_headers(&mut req, Some("test".to_string()))
+        adjust_proxied_headers(&mut req, "test".to_string())
             .await
             .unwrap();
         assert!(req.headers().iter().count() == 2);
