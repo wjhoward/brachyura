@@ -55,11 +55,36 @@ struct Config {
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-pub struct Backend {
-    name: Option<String>,
-    location: Option<String>,
-    backend_type: Option<String>,
-    locations: Option<Vec<String>>,
+#[serde(untagged)]
+pub enum Backend {
+    Single {
+        name: String,
+        location: String,
+    },
+    LoadBalanced {
+        name: String,
+        locations: Vec<String>,
+    },
+}
+
+impl Backend {
+    fn name(&self) -> &str {
+        match self {
+            Backend::Single { name, .. } => name,
+            Backend::LoadBalanced { name, .. } => name,
+        }
+    }
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Backend::Single { name, location } => write!(f, "{name} -> {location}"),
+            Backend::LoadBalanced { name, locations } => {
+                write!(f, "{name} -> [{}] (load balanced)", locations.join(", "))
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -85,16 +110,14 @@ impl ProxyState {
     fn new(config: &Config) -> ProxyState {
         let mut backends: HashMap<String, Option<BackendState>> = HashMap::new();
 
-        for backend_config in &config.backends {
-            if backend_config.backend_type.as_deref() == Some("loadbalanced")
-                && backend_config.name.is_some()
-            {
-                backends.insert(
-                    backend_config.name.clone().unwrap(),
-                    Some(BackendState { rr_count: -1 }),
-                );
-            } else if backend_config.name.is_some() {
-                backends.insert(backend_config.name.clone().unwrap(), None);
+        for backend in &config.backends {
+            match backend {
+                Backend::Single { name, .. } => {
+                    backends.insert(name.clone(), None);
+                }
+                Backend::LoadBalanced { name, .. } => {
+                    backends.insert(name.clone(), Some(BackendState { rr_count: -1 }));
+                }
             }
         }
         ProxyState { backends }
@@ -344,6 +367,10 @@ pub async fn run_server(config_path: String) -> Result<()> {
     .await
     .context("Failed to load TLS config")?;
 
+    for backend in &proxy_config.config.backends {
+        info!("backend: {backend}");
+    }
+
     let app = Router::new()
         .route("/", any(proxy_handler))
         .route("/{*wildcard}", any(proxy_handler))
@@ -376,10 +403,7 @@ mod tests {
         let data = read_proxy_config_yaml("tests/config.yaml".to_string())
             .await
             .unwrap();
-        assert_eq!(
-            data.backends[0].name.as_ref().unwrap(),
-            &String::from("test.home")
-        );
+        assert_eq!(data.backends[0].name(), "test.home");
     }
 
     #[tokio::test]
