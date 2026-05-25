@@ -12,7 +12,7 @@ use axum::{
     extract::Extension,
     http::{uri::Uri, HeaderValue, Method, Request, Response, StatusCode, Version},
     middleware,
-    routing::{any, get},
+    routing::any,
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
