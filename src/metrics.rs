@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use anyhow::Error;
 use axum::{extract::Request, middleware::Next, response::IntoResponse};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
+
 use prometheus::{
     self, register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec, IntCounterVec,
     TextEncoder,
@@ -10,7 +11,7 @@ use prometheus::{
 
 use crate::ResponseContext;
 
-pub static METRICS: Lazy<Metrics> = Lazy::new(Metrics::new);
+pub static METRICS: LazyLock<Metrics> = LazyLock::new(Metrics::new);
 
 pub struct Metrics {
     pub http_request_counter: IntCounterVec,

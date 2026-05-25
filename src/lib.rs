@@ -15,7 +15,7 @@ use axum::{
     routing::any,
     Router,
 };
-use axum_server::tls_rustls::RustlsConfig;
+use axum_server::{tls_rustls::RustlsConfig, Handle};
 use env_logger::Env;
 use hyper::http::{
     header,
@@ -24,6 +24,9 @@ use hyper::http::{
 };
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+use tokio::signal;
+#[cfg(unix)]
+use tokio::signal::unix::SignalKind;
 
 mod client;
 mod metrics;
@@ -346,6 +349,32 @@ async fn proxy_handler(
     Ok(response)
 }
 
+async fn shutdown_signal() {
+    // Wait for SIGINT or SIGTERM
+    let sigint = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install SIGINT handler");
+    };
+
+    #[cfg(unix)]
+    let sigterm = async {
+        signal::unix::signal(SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(unix)]
+    tokio::select! {
+        _ = sigint => {},
+        _ = sigterm => {},
+    }
+
+    #[cfg(not(unix))]
+    sigint.await;
+}
+
 pub async fn run_server(config_path: String) -> Result<()> {
     let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
 
@@ -378,9 +407,18 @@ pub async fn run_server(config_path: String) -> Result<()> {
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
 
+    let handle = Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        info!("Shutdown signal received, draining in flight requests");
+        shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+    });
+
     info!("proxy listening on {}", listen_address);
 
     axum_server::bind_rustls(listen_address, tls_config)
+        .handle(handle)
         .serve(app.into_make_service())
         .await
         .context("Server error")?;

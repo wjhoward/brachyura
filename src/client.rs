@@ -15,7 +15,7 @@ type HttpClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
 #[derive(Debug)]
 pub struct Client {
     client: HttpClient,
-    timeout: Option<u64>,
+    timeout: Duration,
 }
 
 impl Client {
@@ -23,16 +23,14 @@ impl Client {
         let client: HttpClient =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
                 .build(HttpConnector::new());
-        Client { client, timeout }
+        Client {
+            client,
+            timeout: Duration::from_millis(timeout.unwrap_or(60_000)),
+        }
     }
 
     pub async fn make_request(&self, req: Request<Body>) -> Response<Body> {
-        match timeout(
-            Duration::from_millis(self.timeout.unwrap_or(60_000)),
-            self.client.request(req),
-        )
-        .await
-        {
+        match timeout(self.timeout, self.client.request(req)).await {
             Ok(result) => match result {
                 Ok(response) => response.into_response(),
                 Err(e) => {

@@ -71,7 +71,7 @@ async fn http_request(
     protocol: &str,
     url: &str,
     host_header: Option<&str>,
-    no_proxy: Option<bool>,
+    no_proxy: bool,
     method: Option<Method>,
 ) -> Result<Response, Error> {
     let mut client_builder = reqwest::Client::builder()
@@ -84,25 +84,19 @@ async fn http_request(
     }
     let client = client_builder.build().unwrap();
 
-    let client_method;
-    if method == Some(Method::HEAD) {
-        client_method = client.head(url);
-    } else if method == Some(Method::POST) {
-        client_method = client.post(url);
-    } else if method == Some(Method::PUT) {
-        client_method = client.put(url);
+    let request_builder = match method {
+        Some(Method::HEAD) => client.head(url),
+        Some(Method::POST) => client.post(url),
+        Some(Method::PUT) => client.put(url),
+        _ => client.get(url),
+    };
+
+    if let Some(host) = host_header {
+        request_builder.header(HOST, host).send().await
+    } else if no_proxy {
+        request_builder.header("x-no-proxy", "true").send().await
     } else {
-        client_method = client.get(url);
-    }
-    if host_header.is_some() {
-        client_method
-            .header(HOST, host_header.unwrap())
-            .send()
-            .await
-    } else if no_proxy.is_some() && no_proxy.unwrap() {
-        client_method.header("x-no-proxy", "true").send().await
-    } else {
-        client_method.send().await
+        request_builder.send().await
     }
 }
 
@@ -134,7 +128,7 @@ async fn http1_get() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         None,
     )
     .await;
@@ -154,7 +148,7 @@ async fn http1_get_no_host_header() {
     test_init();
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http1", "https://127.0.0.1:4000/test", None, None, None).await;
+    let resp = http_request("http1", "https://127.0.0.1:4000/test", None, false, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
@@ -171,14 +165,7 @@ async fn http1_get_no_proxy_header_status() {
     test_init();
 
     // Send an internal /status request
-    let resp = http_request(
-        "http1",
-        "https://127.0.0.1:4000/status",
-        None,
-        Some(true),
-        None,
-    )
-    .await;
+    let resp = http_request("http1", "https://127.0.0.1:4000/status", None, true, None).await;
 
     // In this case the proxy should respond with a 200
     assert_response(resp, 200, Some("The proxy is running")).await;
@@ -199,20 +186,13 @@ async fn http1_get_no_proxy_header_metrics() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         None,
     )
     .await;
 
     // Send an internal /metrics request
-    let resp = http_request(
-        "http1",
-        "https://127.0.0.1:4000/metrics",
-        None,
-        Some(true),
-        None,
-    )
-    .await;
+    let resp = http_request("http1", "https://127.0.0.1:4000/metrics", None, true, None).await;
     let response = resp.unwrap();
     let status = response.status();
     let body = response.bytes().await.unwrap();
@@ -235,7 +215,7 @@ async fn http1_head() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         Some(Method::HEAD),
     )
     .await;
@@ -259,7 +239,7 @@ async fn http1_post() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         Some(Method::POST),
     )
     .await;
@@ -283,7 +263,7 @@ async fn http1_put() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         Some(Method::PUT),
     )
     .await;
@@ -307,7 +287,7 @@ async fn http2_get() {
         "http2",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         None,
     )
     .await;
@@ -327,7 +307,7 @@ async fn http2_get_no_host_header() {
     test_init();
 
     // Send a request to the proxy without a host header
-    let resp = http_request("http2", "https://127.0.0.1:4000/test", None, None, None).await;
+    let resp = http_request("http2", "https://127.0.0.1:4000/test", None, false, None).await;
 
     // In this case the proxy should respond with a 404
     assert_response(resp, 404, Some("Host header not defined")).await;
@@ -344,14 +324,7 @@ async fn http2_get_no_proxy_header_status() {
     test_init();
 
     // Send an internal /status request
-    let resp = http_request(
-        "http2",
-        "https://127.0.0.1:4000/status",
-        None,
-        Some(true),
-        None,
-    )
-    .await;
+    let resp = http_request("http2", "https://127.0.0.1:4000/status", None, true, None).await;
 
     // In this case the proxy should respond with a 200
     assert_response(resp, 200, Some("The proxy is running")).await;
@@ -372,20 +345,13 @@ async fn http2_get_no_proxy_header_metrics() {
         "http2",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         None,
     )
     .await;
 
     // Send an internal /metrics request
-    let resp = http_request(
-        "http2",
-        "https://127.0.0.1:4000/metrics",
-        None,
-        Some(true),
-        None,
-    )
-    .await;
+    let resp = http_request("http2", "https://127.0.0.1:4000/metrics", None, true, None).await;
     let response = resp.unwrap();
     let status = response.status();
     let body = response.bytes().await.unwrap();
@@ -408,7 +374,7 @@ async fn http2_head() {
         "http2",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         Some(Method::HEAD),
     )
     .await;
@@ -432,7 +398,7 @@ async fn http2_post() {
         "http2",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         Some(Method::POST),
     )
     .await;
@@ -456,7 +422,7 @@ async fn http2_put() {
         "http2",
         "https://127.0.0.1:4000/test",
         Some("test.home"),
-        None,
+        false,
         Some(Method::PUT),
     )
     .await;
@@ -485,7 +451,7 @@ async fn load_balancing_round_robin() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test-lb.home"),
-        None,
+        false,
         None,
     )
     .await;
@@ -497,7 +463,7 @@ async fn load_balancing_round_robin() {
         "http1",
         "https://127.0.0.1:4000/test",
         Some("test-lb.home"),
-        None,
+        false,
         None,
     )
     .await;
@@ -513,7 +479,7 @@ async fn proxied_backend_timeout() {
         "http1",
         "https://127.0.0.1:4000/delay",
         Some("test.home"),
-        None,
+        false,
         None,
     )
     .await;

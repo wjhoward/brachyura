@@ -286,7 +286,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "log",
- "once_cell",
  "prometheus",
  "reqwest",
  "rustls",
