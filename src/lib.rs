@@ -12,7 +12,7 @@ use axum::{
     extract::Extension,
     http::{uri::Uri, HeaderValue, Method, Request, Response, StatusCode, Version},
     middleware,
-    routing::get,
+    routing::{any, get},
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
@@ -345,14 +345,8 @@ pub async fn run_server(config_path: String) -> Result<()> {
     .context("Failed to load TLS config")?;
 
     let app = Router::new()
-        .route(
-            "/",
-            get(proxy_handler).post(proxy_handler).put(proxy_handler),
-        )
-        .route(
-            "/{*wildcard}",
-            get(proxy_handler).post(proxy_handler).put(proxy_handler),
-        )
+        .route("/", any(proxy_handler))
+        .route("/{*wildcard}", any(proxy_handler))
         .route_layer(middleware::from_fn(record_metrics))
         .layer(Extension(proxy_config))
         .layer(Extension(proxy_state));
