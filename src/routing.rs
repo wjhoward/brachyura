@@ -18,30 +18,21 @@ pub fn router(
         .unwrap_or_else(|e| e.into_inner())
         .backends;
 
-    let backend = match_backend(backends_config, host_authority)?;
+    let backend = match_backend(backends_config, &host_authority)?;
 
-    // Check if load balancing is enabled
-    if backend.backend_type.as_deref() == Some("loadbalanced") {
-        if backend.locations.is_some() {
-            let backend_state = backends_state.get_mut(&backend.name.clone()?)?.as_mut()?;
-            round_robin_select(backend.locations.as_ref()?, backend_state)
-        } else {
-            // Config not valid
-            None
+    match backend {
+        Backend::Single { location, .. } => Some(location.clone()),
+        Backend::LoadBalanced { name, locations } => {
+            let backend_state = backends_state.get_mut(name)?.as_mut()?;
+            round_robin_select(locations, backend_state)
         }
-    } else if backend.location.is_some() {
-        // Load balancing not enabled, return the single location / backend
-        backend.location.clone()
-    } else {
-        // Config not valid
-        None
     }
 }
 
-fn match_backend(backends: &[Backend], host_authority: String) -> Option<&Backend> {
+fn match_backend<'a>(backends: &'a [Backend], host_authority: &str) -> Option<&'a Backend> {
     backends
         .iter()
-        .find(|&backend| backend.name.as_deref() == Some(&host_authority))
+        .find(|backend| backend.name() == host_authority)
 }
 
 fn round_robin_select(
@@ -105,7 +96,10 @@ mod tests {
             .unwrap()
             .as_mut()
             .unwrap();
-        let backend_locations = config.backends[1].locations.as_ref().unwrap();
+        let backend_locations = match &config.backends[1] {
+            Backend::LoadBalanced { locations, .. } => locations,
+            _ => panic!("expected load balanced backend at index 1"),
+        };
 
         let first_backend = round_robin_select(backend_locations, backend_state).unwrap();
         assert_eq!(first_backend, String::from("127.0.0.1:8000"));
@@ -120,23 +114,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invalid_backend_config() {
+    async fn test_unknown_backend() {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string())
             .await
             .unwrap();
         let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
 
-        let backend = router(
-            &config.backends,
-            proxy_state.clone(),
-            "invalid_backend_1".to_string(),
-        );
-        assert_eq!(backend, None);
-        let backend = router(
-            &config.backends,
-            proxy_state,
-            "invalid_backend_2".to_string(),
-        );
+        let backend = router(&config.backends, proxy_state, "unknown.host".to_string());
         assert_eq!(backend, None);
     }
 }
