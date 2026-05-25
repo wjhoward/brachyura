@@ -217,9 +217,10 @@ async fn proxy_handler(
         (&Method::GET, "/metrics", true, _) => match encode_metrics() {
             Ok(encoded_metrics) => {
                 *response.body_mut() = Body::from(encoded_metrics);
-                response
-                    .headers_mut()
-                    .insert(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
             }
             Err(e) => {
                 warn!("Error encoding metrics: {e}");
