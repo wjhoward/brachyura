@@ -15,7 +15,7 @@ pub fn router(
     // so that the mutex guard goes out of scope once the function completes
     let backends_state = &mut proxy_state
         .lock()
-        .expect("routing - proxy_state lock error")
+        .unwrap_or_else(|e| e.into_inner())
         .backends;
 
     let backend = match_backend(backends_config, host_authority)?;
