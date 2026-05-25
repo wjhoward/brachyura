@@ -3,7 +3,7 @@ use std::{
     convert::Infallible,
     env,
     net::{IpAddr, SocketAddr, SocketAddrV4},
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use anyhow::{Context, Error, Result};
@@ -47,9 +47,15 @@ const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
 ];
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct TlsConfig {
+    cert_path: String,
+    key_path: String,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Config {
     listen: SocketAddrV4,
-    tls: HashMap<String, String>,
+    tls: TlsConfig,
     timeout: Option<u64>,
     backends: Vec<Backend>,
 }
@@ -100,8 +106,9 @@ impl ProxyConfig {
 
 #[derive(Debug)]
 pub struct BackendState {
-    rr_count: isize, // Round robin counter
+    rr_count: AtomicUsize,
 }
+
 pub struct ProxyState {
     backends: HashMap<String, Option<BackendState>>,
 }
@@ -116,7 +123,12 @@ impl ProxyState {
                     backends.insert(name.clone(), None);
                 }
                 Backend::LoadBalanced { name, .. } => {
-                    backends.insert(name.clone(), Some(BackendState { rr_count: -1 }));
+                    backends.insert(
+                        name.clone(),
+                        Some(BackendState {
+                            rr_count: AtomicUsize::new(0),
+                        }),
+                    );
                 }
             }
         }
@@ -192,7 +204,7 @@ fn bad_request_handler(mut response: Response<Body>, message: String) -> Respons
 
 async fn proxy_handler(
     Extension(proxy_config): Extension<Arc<ProxyConfig>>,
-    Extension(proxy_state): Extension<Arc<Mutex<ProxyState>>>,
+    Extension(proxy_state): Extension<Arc<ProxyState>>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
     let mut response = Response::new(Body::empty());
@@ -343,26 +355,14 @@ pub async fn run_server(config_path: String) -> Result<()> {
 
     let client = client::Client::new(config.timeout);
 
-    let proxy_state = Arc::new(Mutex::new(ProxyState::new(&config)));
+    let proxy_state = Arc::new(ProxyState::new(&config));
 
     let proxy_config = Arc::new(ProxyConfig::new(config, client));
 
     let current_dir = env::current_dir().context("Unable to determine current directory")?;
     let tls_config = RustlsConfig::from_pem_file(
-        current_dir.join(
-            proxy_config
-                .config
-                .tls
-                .get("cert_path")
-                .context("Unable to read cert_path from config")?,
-        ),
-        current_dir.join(
-            proxy_config
-                .config
-                .tls
-                .get("key_path")
-                .context("Unable to read key_path from config")?,
-        ),
+        current_dir.join(&proxy_config.config.tls.cert_path),
+        current_dir.join(&proxy_config.config.tls.key_path),
     )
     .await
     .context("Failed to load TLS config")?;
