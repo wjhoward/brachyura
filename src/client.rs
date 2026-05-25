@@ -7,7 +7,7 @@ use axum::{
 };
 use hyper::StatusCode;
 use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
-use log::info;
+use log::warn;
 use tokio::time::timeout;
 
 type HttpClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
@@ -44,7 +44,7 @@ impl Client {
                     } else {
                         error_string = "Unhandled error, see logs";
                         error_status = StatusCode::INTERNAL_SERVER_ERROR;
-                        info!("Unhandled error: {:?}", e);
+                        warn!("Unhandled error: {:?}", e);
                     }
                     (error_status, error_string).into_response()
                 }

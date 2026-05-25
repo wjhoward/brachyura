@@ -42,7 +42,7 @@ pub fn encode_metrics() -> Result<String, Error> {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     encoder.encode(&metric_families, &mut buffer)?;
-    Ok(String::from_utf8(buffer.clone())?)
+    Ok(String::from_utf8(buffer)?)
 }
 
 pub async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
@@ -71,8 +71,8 @@ pub async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
     response
 }
 
+#[cfg(test)]
 mod tests {
-    #![allow(unused_imports)]
     use super::*;
 
     #[tokio::test]
