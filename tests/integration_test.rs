@@ -110,7 +110,7 @@ fn test_init() {
     // Start the proxy
     tokio::spawn(async move {
         let config_path = String::from("./tests/config.yaml");
-        run_server(config_path).await;
+        let _ = run_server(config_path).await;
     });
 
     let _ = rustls::crypto::ring::default_provider().install_default();
