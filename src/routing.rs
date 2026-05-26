@@ -46,11 +46,9 @@ mod tests {
     use super::*;
     use crate::{read_proxy_config_yaml, router, ProxyState};
 
-    #[tokio::test]
-    async fn test_router_single_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string())
-            .await
-            .unwrap();
+    #[test]
+    fn test_router_single_backend() {
+        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
 
         let proxy_state = Arc::new(ProxyState::new(&config));
 
@@ -58,22 +56,18 @@ mod tests {
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
-    #[tokio::test]
-    async fn test_router_loadbalanced_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string())
-            .await
-            .unwrap();
+    #[test]
+    fn test_router_loadbalanced_backend() {
+        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         let proxy_state = Arc::new(ProxyState::new(&config));
 
         let backend = router(&config.backends, proxy_state, "test-lb.home".to_string());
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
-    #[tokio::test]
-    async fn test_round_robin_select() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string())
-            .await
-            .unwrap();
+    #[test]
+    fn test_round_robin_select() {
+        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         let proxy_state = ProxyState::new(&config);
         let backend_name = String::from("test-lb2.home");
         let backend_state = proxy_state
@@ -88,22 +82,20 @@ mod tests {
         };
 
         let first_backend = round_robin_select(backend_locations, backend_state).unwrap();
-        assert_eq!(first_backend, String::from("127.0.0.1:8000"));
+        assert_eq!(first_backend, "127.0.0.1:8000");
         let second_backend = round_robin_select(backend_locations, backend_state).unwrap();
-        assert_eq!(second_backend, String::from("127.0.0.1:8001"));
+        assert_eq!(second_backend, "127.0.0.1:8001");
         let third_backend = round_robin_select(backend_locations, backend_state).unwrap();
-        assert_eq!(third_backend, String::from("127.0.0.1:8000"));
+        assert_eq!(third_backend, "127.0.0.1:8000");
         let fourth_backend = round_robin_select(backend_locations, backend_state).unwrap();
-        assert_eq!(fourth_backend, String::from("127.0.0.1:8001"));
+        assert_eq!(fourth_backend, "127.0.0.1:8001");
         let fifth_backend = round_robin_select(backend_locations, backend_state).unwrap();
-        assert_eq!(fifth_backend, String::from("127.0.0.1:8000"));
+        assert_eq!(fifth_backend, "127.0.0.1:8000");
     }
 
-    #[tokio::test]
-    async fn test_unknown_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string())
-            .await
-            .unwrap();
+    #[test]
+    fn test_unknown_backend() {
+        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         let proxy_state = Arc::new(ProxyState::new(&config));
 
         let backend = router(&config.backends, proxy_state, "unknown.host".to_string());

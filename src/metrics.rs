@@ -1,9 +1,7 @@
-use std::time::Instant;
+use std::{sync::LazyLock, time::Instant};
 
 use anyhow::Error;
 use axum::{extract::Request, middleware::Next, response::IntoResponse};
-use std::sync::LazyLock;
-
 use prometheus::{
     self, register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec, IntCounterVec,
     TextEncoder,
@@ -59,7 +57,7 @@ pub async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
                 response.status().as_str(),
                 &response_context.backend_location,
             ])
-            .inc_by(1);
+            .inc();
 
         METRICS
             .http_request_duration
@@ -81,7 +79,7 @@ mod tests {
         METRICS
             .http_request_counter
             .with_label_values(&["200", "test"])
-            .inc_by(1);
+            .inc();
         assert!(
             METRICS
                 .http_request_counter
@@ -96,7 +94,7 @@ mod tests {
         METRICS
             .http_request_counter
             .with_label_values(&["200", "test"])
-            .inc_by(1);
+            .inc();
         assert!(encode_metrics().unwrap().contains(
             "# HELP http_request_total Number of http requests received\n\
                 # TYPE http_request_total counter\nhttp_request_total"

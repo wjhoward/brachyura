@@ -4,9 +4,10 @@ use std::{
     env,
     net::{IpAddr, SocketAddr, SocketAddrV4},
     sync::{atomic::AtomicUsize, Arc},
+    time::Duration,
 };
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::Extension,
@@ -112,6 +113,7 @@ pub struct BackendState {
     rr_count: AtomicUsize,
 }
 
+#[derive(Debug)]
 pub struct ProxyState {
     backends: HashMap<String, Option<BackendState>>,
 }
@@ -144,27 +146,25 @@ pub struct ResponseContext {
     backend_location: String,
 }
 
-async fn read_proxy_config_yaml(yaml_path: String) -> Result<Config> {
+// Not async — uses blocking std::fs I/O which is acceptable as this runs once at startup
+fn read_proxy_config_yaml(yaml_path: String) -> Result<Config> {
     let file = std::fs::File::open(&yaml_path)
         .with_context(|| format!("Unable to open config file: {yaml_path}"))?;
     let deserialized: Config = serde_yaml::from_reader(file)?;
     Ok(deserialized)
 }
 
-async fn adjust_proxied_headers(
-    req: &mut Request<Body>,
-    host_authority: String,
-) -> Result<(), Error> {
+fn adjust_proxied_headers(req: &mut Request<Body>, host_authority: &str) -> Result<()> {
     // Adjust headers for a request which is being proxied downstream
 
     // Remove hop by hop headers
     for h in HOP_BY_HOP_HEADERS {
-        req.headers_mut().remove(h.to_string());
+        req.headers_mut().remove(h);
     }
 
     // Append a host header
     req.headers_mut()
-        .insert(HOST, HeaderValue::from_str(&host_authority)?);
+        .insert(HOST, HeaderValue::from_str(host_authority)?);
 
     // Append a no-proxy header to avoid loops
     req.headers_mut()
@@ -175,24 +175,20 @@ async fn adjust_proxied_headers(
 
 fn get_host(req: &Request<Body>) -> Option<String> {
     // Look for a host header first, otherwise fallback to checking the HTTP Authority (http2+)
-    let get_host_header = req.headers().get("host");
-    let host = match get_host_header {
+    let host_header = req.headers().get("host");
+    let host = match host_header {
         Some(header) => header.to_str().ok().map(|s| s.to_string()),
-        _ => req.uri().authority().map(|authority| authority.to_string()),
+        None => req.uri().authority().map(|authority| authority.to_string()),
     };
     // Parse the HTTP authority, removing port numbers
-    let ip_or_host = host.clone().unwrap_or_else(|| "".to_string());
-    let ip_or_host_no_port = ip_or_host.split(":").next().map(|s| s.to_string());
+    let ip_or_host = host.unwrap_or_default();
+    let ip_or_host_no_port = ip_or_host.split(':').next().map(|s| s.to_string());
 
     // If the authority is "localhost" or an IP address, it's not a host for the purpose of proxying
-    if ip_or_host_no_port == Some("localhost".to_string()) {
+    if ip_or_host_no_port.as_deref() == Some("localhost") {
         return None;
     }
-    let ipv4: Option<IpAddr> = ip_or_host_no_port
-        .clone()
-        .unwrap_or_else(|| "".to_string())
-        .parse()
-        .ok();
+    let ipv4: Option<IpAddr> = ip_or_host_no_port.as_deref().unwrap_or("").parse().ok();
     if ipv4.is_some() {
         return None;
     }
@@ -238,16 +234,10 @@ async fn proxy_handler(
 
     debug!(
         "no_proxy header: {}, host header: {:?}",
-        no_proxy,
-        host_authority.clone()
+        no_proxy, host_authority
     );
 
-    match (
-        req.method(),
-        req.uri().path(),
-        no_proxy,
-        host_authority.clone(),
-    ) {
+    match (req.method(), req.uri().path(), no_proxy, host_authority) {
         // Proxy internal endpoints
         (&Method::GET, "/status", true, _) => {
             *response.body_mut() = Body::from("The proxy is running");
@@ -321,7 +311,7 @@ async fn proxy_handler(
 
                     // Simply take the existing request and mutate the uri and headers
                     *req.uri_mut() = uri.clone();
-                    if let Err(e) = adjust_proxied_headers(&mut req, host).await {
+                    if let Err(e) = adjust_proxied_headers(&mut req, &host) {
                         warn!("Failed to adjust proxy headers: {e}");
                         *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                         return Ok(response);
@@ -378,7 +368,7 @@ async fn shutdown_signal() {
 pub async fn run_server(config_path: String) -> Result<()> {
     let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
 
-    let config = read_proxy_config_yaml(config_path).await?;
+    let config = read_proxy_config_yaml(config_path)?;
 
     let listen_address = SocketAddr::from(config.listen);
 
@@ -412,7 +402,7 @@ pub async fn run_server(config_path: String) -> Result<()> {
     tokio::spawn(async move {
         shutdown_signal().await;
         info!("Shutdown signal received, draining in flight requests");
-        shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(30)));
     });
 
     info!("proxy listening on {}", listen_address);
@@ -436,30 +426,26 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_read_config_yaml() {
-        let data = read_proxy_config_yaml("tests/config.yaml".to_string())
-            .await
-            .unwrap();
+    #[test]
+    fn test_read_config_yaml() {
+        let data = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         assert_eq!(data.backends[0].name(), "test.home");
     }
 
-    #[tokio::test]
-    async fn test_adjust_proxied_headers() {
+    #[test]
+    fn test_adjust_proxied_headers() {
         let mut req = Request::new(Body::from("test"));
         req.headers_mut().insert(HOST, "test_host".parse().unwrap());
         req.headers_mut()
             .insert(PROXY_AUTHENTICATE, "true".parse().unwrap());
-        adjust_proxied_headers(&mut req, "test".to_string())
-            .await
-            .unwrap();
-        assert!(req.headers().iter().count() == 2);
+        adjust_proxied_headers(&mut req, "test").unwrap();
+        assert_eq!(req.headers().iter().count(), 2);
         assert!(req.headers().contains_key(HOST));
         assert!(req.headers().contains_key("x-no-proxy"));
     }
 
-    #[tokio::test]
-    async fn test_get_host_http1() {
+    #[test]
+    fn test_get_host_http1() {
         let request = Request::builder()
             .method("GET")
             .version(Version::HTTP_10)
@@ -471,8 +457,8 @@ mod tests {
         assert_eq!(host.unwrap(), "test.home");
     }
 
-    #[tokio::test]
-    async fn test_get_host_http1_none() {
+    #[test]
+    fn test_get_host_http1_none() {
         let request = Request::builder()
             .method("GET")
             .version(Version::HTTP_10)
@@ -483,8 +469,8 @@ mod tests {
         assert_eq!(host, None);
     }
 
-    #[tokio::test]
-    async fn test_get_host_http2() {
+    #[test]
+    fn test_get_host_http2() {
         let request = Request::builder()
             .method("GET")
             .version(Version::HTTP_2)
@@ -496,8 +482,8 @@ mod tests {
         assert_eq!(host.unwrap(), "test.home");
     }
 
-    #[tokio::test]
-    async fn test_get_host_http2_none() {
+    #[test]
+    fn test_get_host_http2_none() {
         let request = Request::builder()
             .method("GET")
             .version(Version::HTTP_2)
