@@ -34,17 +34,17 @@ impl Client {
             Ok(result) => match result {
                 Ok(response) => response.into_response(),
                 Err(e) => {
-                    let error_string;
-                    let error_status: StatusCode;
                     if e.is_connect() {
-                        error_string = "Cannot connect to backend";
-                        error_status = StatusCode::SERVICE_UNAVAILABLE;
+                        (StatusCode::SERVICE_UNAVAILABLE, "Cannot connect to backend")
+                            .into_response()
                     } else {
-                        error_string = "Unhandled error, see logs";
-                        error_status = StatusCode::INTERNAL_SERVER_ERROR;
                         warn!("Unhandled error: {:?}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Unhandled error, see logs",
+                        )
+                            .into_response()
                     }
-                    (error_status, error_string).into_response()
                 }
             },
             Err(_) => (StatusCode::GATEWAY_TIMEOUT, "Request timeout").into_response(),
