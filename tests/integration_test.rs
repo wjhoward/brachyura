@@ -1,4 +1,4 @@
-use std::{net::TcpListener, sync::Mutex, thread, time, time::Duration};
+use std::{net::TcpListener, sync::OnceLock, thread, time::Duration};
 
 use brachyura::run_server;
 use reqwest::{header::HOST, Error, Method, Response};
@@ -6,52 +6,66 @@ use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-pub struct MockBackend {
-    pub mock_server: Option<MockServer>,
+
+// All services (proxy + mock backends) share a single dedicated thread and runtime,
+// so they outlive any individual test and are initialised exactly once
+static SERVICES_STARTED: OnceLock<()> = OnceLock::new();
+
+fn start_services() {
+    SERVICES_STARTED.get_or_init(|| {
+        // Install the rustls crypto provider once for the entire test process
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        thread::spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    // Both backends are kept alive as locals for the duration of run_server
+                    let _backend1 =
+                        init_mock_backend("127.0.0.1:8000", "This is the mock backend!").await;
+                    let _backend2 =
+                        init_mock_backend("127.0.0.1:8001", "This is the mock backend 2!").await;
+                    let _ = run_server("./tests/config.yaml".to_string()).await;
+                });
+        });
+        // Wait for proxy and backends to bind and start accepting connections
+        thread::sleep(Duration::from_millis(100));
+    });
 }
 
-impl MockBackend {
-    pub const fn new() -> Self {
-        Self { mock_server: None }
-    }
+async fn init_mock_backend(address: &'static str, resp_body: &'static str) -> MockServer {
+    let listener = TcpListener::bind(address).unwrap();
+    let mock_server = MockServer::builder().listener(listener).start().await;
 
-    pub async fn init(&mut self, address: &str, resp_body: &str) {
-        if self.mock_server.is_none() {
-            let listener = TcpListener::bind(address).unwrap();
-            let mock_server = MockServer::builder().listener(listener).start().await;
+    Mock::given(method("GET"))
+        .and(path("/test"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(resp_body, "text/plain"))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path("/test"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/test"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/test"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/delay"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(1000)))
+        .mount(&mock_server)
+        .await;
 
-            Mock::given(method("GET"))
-                .and(path("/test"))
-                .respond_with(ResponseTemplate::new(200).set_body_raw(resp_body, "text/plain"))
-                .mount(&mock_server)
-                .await;
-            Mock::given(method("HEAD"))
-                .and(path("/test"))
-                .respond_with(ResponseTemplate::new(200))
-                .mount(&mock_server)
-                .await;
-            Mock::given(method("POST"))
-                .and(path("/test"))
-                .respond_with(ResponseTemplate::new(200))
-                .mount(&mock_server)
-                .await;
-            Mock::given(method("PUT"))
-                .and(path("/test"))
-                .respond_with(ResponseTemplate::new(200))
-                .mount(&mock_server)
-                .await;
-            Mock::given(method("GET"))
-                .and(path("/delay"))
-                .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(1000)))
-                .mount(&mock_server)
-                .await;
-            self.mock_server = Some(mock_server);
-        }
-    }
+    mock_server
 }
-
-static MOCK_BACKEND: Mutex<MockBackend> = Mutex::new(MockBackend::new());
-static MOCK_BACKEND2: Mutex<MockBackend> = Mutex::new(MockBackend::new());
 
 async fn assert_response(
     resp: Result<Response, Error>,
@@ -100,28 +114,9 @@ async fn http_request(
     }
 }
 
-fn test_init() {
-    // Start the proxy
-    tokio::spawn(async move {
-        let config_path = String::from("./tests/config.yaml");
-        let _ = run_server(config_path).await;
-    });
-
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // Sleep this thread while the server starts up
-    thread::sleep(time::Duration::from_millis(100));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_get() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -139,13 +134,7 @@ async fn http1_get() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_get_no_host_header() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy without a host header
     let resp = http_request("http1", "https://127.0.0.1:4000/test", None, false, None).await;
@@ -156,13 +145,7 @@ async fn http1_get_no_host_header() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_get_no_proxy_header_status() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send an internal /status request
     let resp = http_request("http1", "https://127.0.0.1:4000/status", None, true, None).await;
@@ -173,13 +156,7 @@ async fn http1_get_no_proxy_header_status() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_get_no_proxy_header_metrics() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to ensure metrics exist
     let _ = http_request(
@@ -202,13 +179,7 @@ async fn http1_get_no_proxy_header_metrics() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_head() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -226,13 +197,7 @@ async fn http1_head() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_post() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -250,13 +215,7 @@ async fn http1_post() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http1_put() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -274,13 +233,7 @@ async fn http1_put() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_get() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -298,13 +251,7 @@ async fn http2_get() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_get_no_host_header() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy without a host header
     let resp = http_request("http2", "https://127.0.0.1:4000/test", None, false, None).await;
@@ -315,13 +262,7 @@ async fn http2_get_no_host_header() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_get_no_proxy_header_status() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send an internal /status request
     let resp = http_request("http2", "https://127.0.0.1:4000/status", None, true, None).await;
@@ -332,13 +273,7 @@ async fn http2_get_no_proxy_header_status() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_get_no_proxy_header_metrics() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to ensure metrics exist
     let _ = http_request(
@@ -361,13 +296,7 @@ async fn http2_get_no_proxy_header_metrics() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_head() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -385,13 +314,7 @@ async fn http2_head() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_post() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -409,13 +332,7 @@ async fn http2_post() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn http2_put() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Send a request to the proxy, which should be forwarded to the mock server
     let resp = http_request(
@@ -433,18 +350,7 @@ async fn http2_put() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn load_balancing_round_robin() {
-    MOCK_BACKEND
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8000", "This is the mock backend!")
-        .await;
-    MOCK_BACKEND2
-        .lock()
-        .unwrap()
-        .init("127.0.0.1:8001", "This is the mock backend 2!")
-        .await;
-
-    test_init();
+    start_services();
 
     // Response from the first mock backend
     let resp = http_request(
@@ -472,7 +378,7 @@ async fn load_balancing_round_robin() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn proxied_backend_timeout() {
-    test_init();
+    start_services();
 
     // Send a request which will timeout
     let resp = http_request(
