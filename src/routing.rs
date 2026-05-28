@@ -1,11 +1,11 @@
 // Logic for selecting the request backend
 use std::sync::{atomic::Ordering, Arc};
 
-use super::{Backend, BackendState, ProxyState};
+use super::{Backend, BackendState, RoutingState};
 
 pub fn router(
     backends_config: &[Backend],
-    proxy_state: Arc<ProxyState>,
+    proxy_state: Arc<RoutingState>,
     host_authority: String,
 ) -> Option<String> {
     // Matches a given host header or authority with a backend
@@ -44,13 +44,13 @@ fn round_robin_select(
 mod tests {
 
     use super::*;
-    use crate::{read_proxy_config_yaml, router, ProxyState};
+    use crate::{read_proxy_config_yaml, router, RoutingState};
 
     #[test]
     fn test_router_single_backend() {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
 
-        let proxy_state = Arc::new(ProxyState::new(&config));
+        let proxy_state = Arc::new(RoutingState::new(&config));
 
         let backend = router(&config.backends, proxy_state, "test.home".to_string());
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
@@ -59,7 +59,7 @@ mod tests {
     #[test]
     fn test_router_loadbalanced_backend() {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
-        let proxy_state = Arc::new(ProxyState::new(&config));
+        let proxy_state = Arc::new(RoutingState::new(&config));
 
         let backend = router(&config.backends, proxy_state, "test-lb.home".to_string());
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
@@ -68,8 +68,8 @@ mod tests {
     #[test]
     fn test_round_robin_select() {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
-        let proxy_state = ProxyState::new(&config);
-        let backend_name = String::from("test-lb2.home");
+        let proxy_state = RoutingState::new(&config);
+        let backend_name = String::from("test-lb.home");
         let backend_state = proxy_state
             .backends
             .get(&backend_name)
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_unknown_backend() {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
-        let proxy_state = Arc::new(ProxyState::new(&config));
+        let proxy_state = Arc::new(RoutingState::new(&config));
 
         let backend = router(&config.backends, proxy_state, "unknown.host".to_string());
         assert_eq!(backend, None);

@@ -114,7 +114,7 @@ async fn http_request(
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_get() {
     start_services();
 
@@ -132,7 +132,7 @@ async fn http1_get() {
     assert_response(resp, 200, Some("This is the mock backend!")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_get_no_host_header() {
     start_services();
 
@@ -143,7 +143,7 @@ async fn http1_get_no_host_header() {
     assert_response(resp, 404, Some("Host header not defined")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_get_no_proxy_header_status() {
     start_services();
 
@@ -154,7 +154,7 @@ async fn http1_get_no_proxy_header_status() {
     assert_response(resp, 200, Some("The proxy is running")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_get_no_proxy_header_metrics() {
     start_services();
 
@@ -177,7 +177,7 @@ async fn http1_get_no_proxy_header_metrics() {
     assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_head() {
     start_services();
 
@@ -195,7 +195,7 @@ async fn http1_head() {
     assert_response(resp, 200, None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_post() {
     start_services();
 
@@ -213,7 +213,7 @@ async fn http1_post() {
     assert_response(resp, 200, None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http1_put() {
     start_services();
 
@@ -231,7 +231,7 @@ async fn http1_put() {
     assert_response(resp, 200, None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_get() {
     start_services();
 
@@ -249,7 +249,7 @@ async fn http2_get() {
     assert_response(resp, 200, Some("This is the mock backend!")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_get_no_host_header() {
     start_services();
 
@@ -260,7 +260,7 @@ async fn http2_get_no_host_header() {
     assert_response(resp, 404, Some("Host header not defined")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_get_no_proxy_header_status() {
     start_services();
 
@@ -271,7 +271,7 @@ async fn http2_get_no_proxy_header_status() {
     assert_response(resp, 200, Some("The proxy is running")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_get_no_proxy_header_metrics() {
     start_services();
 
@@ -294,7 +294,7 @@ async fn http2_get_no_proxy_header_metrics() {
     assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_head() {
     start_services();
 
@@ -312,7 +312,7 @@ async fn http2_head() {
     assert_response(resp, 200, None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_post() {
     start_services();
 
@@ -330,7 +330,7 @@ async fn http2_post() {
     assert_response(resp, 200, None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn http2_put() {
     start_services();
 
@@ -348,7 +348,7 @@ async fn http2_put() {
     assert_response(resp, 200, None).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn load_balancing_round_robin() {
     start_services();
 
@@ -376,7 +376,7 @@ async fn load_balancing_round_robin() {
     assert_response(resp, 200, Some("This is the mock backend 2!")).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::test]
 async fn proxied_backend_timeout() {
     start_services();
 
