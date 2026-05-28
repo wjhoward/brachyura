@@ -11,7 +11,10 @@ use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::State,
-    http::{uri::{Authority, Uri}, HeaderValue, Method, Request, Response, StatusCode, Version},
+    http::{
+        uri::{Authority, Uri},
+        HeaderValue, Method, Request, Response, StatusCode, Version,
+    },
     middleware,
     routing::any,
     Router,
@@ -202,13 +205,22 @@ fn get_host(req: &Request<Body>) -> Option<String> {
         return None;
     }
     // Strip IPv6 brackets before trying to parse as an IP address
-    if host.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>().is_ok() {
+    if host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .is_ok()
+    {
         return None;
     }
     Some(host)
 }
 
-fn error_response(mut response: Response<Body>, status: StatusCode, message: String) -> Response<Body> {
+fn error_response(
+    mut response: Response<Body>,
+    status: StatusCode,
+    message: String,
+) -> Response<Body> {
     *response.body_mut() = Body::from(message);
     *response.status_mut() = status;
     response
@@ -569,7 +581,11 @@ mod tests {
     #[tokio::test]
     async fn test_error_response() {
         let original_response = Response::new(Body::from("test"));
-        let response = error_response(original_response, StatusCode::BAD_REQUEST, "test error".to_string());
+        let response = error_response(
+            original_response,
+            StatusCode::BAD_REQUEST,
+            "test error".to_string(),
+        );
         assert_eq!(response.status(), 400);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
