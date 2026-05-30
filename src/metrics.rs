@@ -49,24 +49,23 @@ pub async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
 
     let response = next.run(req).await;
 
-    if let Some(response_context) = response.extensions().get::<ResponseContext>() {
-        let duration = start.elapsed();
-        METRICS
-            .http_request_counter
-            .with_label_values(&[
-                response.status().as_str(),
-                &response_context.backend_location,
-            ])
-            .inc();
+    let duration = start.elapsed();
+    let backend = response
+        .extensions()
+        .get::<ResponseContext>()
+        .map(|ctx| ctx.backend_location.as_str())
+        .unwrap_or("internal");
 
-        METRICS
-            .http_request_duration
-            .with_label_values(&[
-                response.status().as_str(),
-                &response_context.backend_location,
-            ])
-            .observe(duration.as_secs_f64());
-    }
+    METRICS
+        .http_request_counter
+        .with_label_values(&[response.status().as_str(), backend])
+        .inc();
+
+    METRICS
+        .http_request_duration
+        .with_label_values(&[response.status().as_str(), backend])
+        .observe(duration.as_secs_f64());
+
     response
 }
 

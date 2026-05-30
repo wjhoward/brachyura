@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     env,
-    net::{IpAddr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, SocketAddr},
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
@@ -10,8 +10,11 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::Extension,
-    http::{uri::Uri, HeaderValue, Method, Request, Response, StatusCode, Version},
+    extract::State,
+    http::{
+        uri::{Authority, Uri},
+        HeaderValue, Method, Request, Response, StatusCode, Version,
+    },
     middleware,
     routing::any,
     Router,
@@ -58,14 +61,14 @@ struct TlsConfig {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Config {
-    listen: SocketAddrV4,
+    listen: SocketAddr,
     tls: TlsConfig,
     timeout: Option<u64>,
     backends: Vec<Backend>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
+#[serde(tag = "backend_type", rename_all = "lowercase")]
 pub enum Backend {
     Single {
         name: String,
@@ -114,12 +117,12 @@ pub struct BackendState {
 }
 
 #[derive(Debug)]
-pub struct ProxyState {
+pub struct RoutingState {
     backends: HashMap<String, Option<BackendState>>,
 }
 
-impl ProxyState {
-    fn new(config: &Config) -> ProxyState {
+impl RoutingState {
+    fn new(config: &Config) -> RoutingState {
         let mut backends: HashMap<String, Option<BackendState>> = HashMap::new();
 
         for backend in &config.backends {
@@ -137,8 +140,14 @@ impl ProxyState {
                 }
             }
         }
-        ProxyState { backends }
+        RoutingState { backends }
     }
+}
+
+#[derive(Clone)]
+struct ProxyState {
+    proxy_config: Arc<ProxyConfig>,
+    routing_state: Arc<RoutingState>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,39 +182,58 @@ fn adjust_proxied_headers(req: &mut Request<Body>, host_authority: &str) -> Resu
     Ok(())
 }
 
+/// Extracts the virtual hostname from the request for use in backend routing.
+/// Returns None if the request has no usable host, or if the host is an IP address
+/// or localhost — indicating the client is addressing the proxy directly rather than
+/// a named virtual backend.
 fn get_host(req: &Request<Body>) -> Option<String> {
-    // Look for a host header first, otherwise fallback to checking the HTTP Authority (http2+)
-    let host_header = req.headers().get("host");
-    let host = match host_header {
-        Some(header) => header.to_str().ok().map(|s| s.to_string()),
-        None => req.uri().authority().map(|authority| authority.to_string()),
-    };
-    // Parse the HTTP authority, removing port numbers
-    let ip_or_host = host.unwrap_or_default();
-    let ip_or_host_no_port = ip_or_host.split(':').next().map(|s| s.to_string());
+    // Try and parse host header first
+    // If not, extract the HTTP authority pseudo header
+    // Authority::host() strips the port in both cases
+    let host = match req.headers().get("host") {
+        Some(header) => header
+            .to_str()
+            .ok()
+            .and_then(|s| s.parse::<Authority>().ok())
+            .map(|a| a.host().to_owned()),
+        None => req.uri().authority().map(|a| a.host().to_owned()),
+    }?; // Returns None if no host header or URI authority is present
 
-    // If the authority is "localhost" or an IP address, it's not a host for the purpose of proxying
-    if ip_or_host_no_port.as_deref() == Some("localhost") {
+    // Filter out localhost and IP addresses — these indicate direct proxy access,
+    // not a request intended for a named virtual backend
+    if host.eq_ignore_ascii_case("localhost") {
         return None;
     }
-    let ipv4: Option<IpAddr> = ip_or_host_no_port.as_deref().unwrap_or("").parse().ok();
-    if ipv4.is_some() {
+    // Strip IPv6 brackets before trying to parse as an IP address
+    if host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .is_ok()
+    {
         return None;
     }
-    ip_or_host_no_port
+    Some(host)
 }
 
-fn bad_request_handler(mut response: Response<Body>, message: String) -> Response<Body> {
+fn error_response(
+    mut response: Response<Body>,
+    status: StatusCode,
+    message: String,
+) -> Response<Body> {
     *response.body_mut() = Body::from(message);
-    *response.status_mut() = StatusCode::BAD_REQUEST;
+    *response.status_mut() = status;
     response
 }
 
 async fn proxy_handler(
-    Extension(proxy_config): Extension<Arc<ProxyConfig>>,
-    Extension(proxy_state): Extension<Arc<ProxyState>>,
+    State(state): State<ProxyState>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
+    let ProxyState {
+        proxy_config,
+        routing_state,
+    } = state;
     let mut response = Response::new(Body::empty());
 
     debug!(
@@ -220,8 +248,9 @@ async fn proxy_handler(
     match req.version() {
         Version::HTTP_10 | Version::HTTP_11 | Version::HTTP_2 => {}
         _ => {
-            return Ok(bad_request_handler(
+            return Ok(error_response(
                 response,
+                StatusCode::HTTP_VERSION_NOT_SUPPORTED,
                 format!("Unsupported HTTP version: {:?}", req.version()),
             ))
         }
@@ -274,7 +303,7 @@ async fn proxy_handler(
             debug!("Standard request proxy");
             let backend_location = router(
                 &proxy_config.config.backends,
-                proxy_state.clone(),
+                routing_state.clone(),
                 host.clone(),
             );
 
@@ -370,13 +399,18 @@ pub async fn run_server(config_path: String) -> Result<()> {
 
     let config = read_proxy_config_yaml(config_path)?;
 
-    let listen_address = SocketAddr::from(config.listen);
+    let listen_address = config.listen;
 
     let client = client::Client::new(config.timeout);
 
-    let proxy_state = Arc::new(ProxyState::new(&config));
+    let routing_state = Arc::new(RoutingState::new(&config));
 
     let proxy_config = Arc::new(ProxyConfig::new(config, client));
+
+    let proxy_state = ProxyState {
+        proxy_config: proxy_config.clone(),
+        routing_state,
+    };
 
     let current_dir = env::current_dir().context("Unable to determine current directory")?;
     let tls_config = RustlsConfig::from_pem_file(
@@ -394,8 +428,7 @@ pub async fn run_server(config_path: String) -> Result<()> {
         .route("/", any(proxy_handler))
         .route("/{*wildcard}", any(proxy_handler))
         .route_layer(middleware::from_fn(record_metrics))
-        .layer(Extension(proxy_config))
-        .layer(Extension(proxy_state));
+        .with_state(proxy_state);
 
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -494,10 +527,65 @@ mod tests {
         assert_eq!(host, None);
     }
 
+    #[test]
+    fn test_get_host_http1_ipv6_ip() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_11)
+            .uri("https://[::1]:4000/test")
+            .header(HOST, "[::1]:4000")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host, None);
+    }
+
+    #[test]
+    fn test_get_host_http2_ipv6_ip() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_2)
+            .uri("https://[::1]:4000/test")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host, None);
+    }
+
+    #[test]
+    fn test_get_host_http1_with_port() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_11)
+            .uri("https://localhost:4000/test")
+            .header(HOST, "test.home:8080")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host.unwrap(), "test.home");
+    }
+
+    #[test]
+    fn test_get_host_http2_with_port() {
+        let request = Request::builder()
+            .method("GET")
+            .version(Version::HTTP_2)
+            .uri("https://localhost:4000/test")
+            .header(HOST, "test.home:8080")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host.unwrap(), "test.home");
+    }
+
     #[tokio::test]
-    async fn test_bad_request_handler() {
+    async fn test_error_response() {
         let original_response = Response::new(Body::from("test"));
-        let response = bad_request_handler(original_response, "test error".to_string());
+        let response = error_response(
+            original_response,
+            StatusCode::BAD_REQUEST,
+            "test error".to_string(),
+        );
         assert_eq!(response.status(), 400);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await

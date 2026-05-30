@@ -8,13 +8,9 @@ timeout: 500
 
 backends:
   - name: "test.home"
+    backend_type: "single"
     location: "127.0.0.1:8000"
   - name: "test-lb.home"
-    backend_type: "loadbalanced"
-    locations:
-      - "127.0.0.1:8000"
-      - "127.0.0.1:8001"
-  - name: "test-lb2.home"
     backend_type: "loadbalanced"
     locations:
       - "127.0.0.1:8000"
