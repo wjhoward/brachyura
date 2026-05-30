@@ -13,7 +13,7 @@ use axum::{
     extract::State,
     http::{
         uri::{Authority, Uri},
-        HeaderValue, Method, Request, Response, StatusCode, Version,
+        HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Version,
     },
     middleware,
     routing::any,
@@ -54,12 +54,14 @@ const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
 ];
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TlsConfig {
     cert_path: String,
     key_path: String,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
     listen: SocketAddr,
     tls: TlsConfig,
@@ -68,7 +70,7 @@ struct Config {
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-#[serde(tag = "backend_type", rename_all = "lowercase")]
+#[serde(tag = "backend_type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Backend {
     Single {
         name: String,
@@ -163,23 +165,43 @@ fn read_proxy_config_yaml(yaml_path: String) -> Result<Config> {
     Ok(deserialized)
 }
 
-fn adjust_proxied_headers(req: &mut Request<Body>, host_authority: &str) -> Result<()> {
-    // Adjust headers for a request which is being proxied downstream
-
-    // Remove hop by hop headers
-    for h in HOP_BY_HOP_HEADERS {
-        req.headers_mut().remove(h);
+fn remove_hop_by_hop_headers(headers: &mut HeaderMap) {
+    // RFC 7230 §6.1: the Connection header value lists additional headers that are
+    // hop by hop for this connection only — remove those first, before Connection itself
+    // is removed by the fixed list below
+    if let Some(connection) = headers.get(header::CONNECTION).cloned() {
+        if let Ok(connection_str) = connection.to_str() {
+            for name in connection_str.split(',') {
+                headers.remove(name.trim());
+            }
+        }
     }
 
-    // Append a host header
-    req.headers_mut()
-        .insert(HOST, HeaderValue::from_str(host_authority)?);
+    // Remove the standard hop by hop headers defined by RFC 7230
+    for h in HOP_BY_HOP_HEADERS {
+        headers.remove(h);
+    }
+}
 
-    // Append a no-proxy header to avoid loops
+fn adjust_backend_request_headers(req: &mut Request<Body>, host_authority: &str) {
+    // Remove hop by hop headers before forwarding to the backend
+    remove_hop_by_hop_headers(req.headers_mut());
+
+    // Rewrite the Host header to the backend address
+    req.headers_mut().insert(
+        HOST,
+        HeaderValue::from_str(host_authority)
+            .expect("host_authority from parsed Authority is always a valid HeaderValue"),
+    );
+
+    // Mark as already proxied to prevent forwarding loops
     req.headers_mut()
         .insert("x-no-proxy", HeaderValue::from_static("true"));
+}
 
-    Ok(())
+fn adjust_backend_response_headers(res: &mut Response<Body>) {
+    // Remove hop by hop headers from the backend response before returning to the client
+    remove_hop_by_hop_headers(res.headers_mut());
 }
 
 /// Extracts the virtual hostname from the request for use in backend routing.
@@ -340,11 +362,7 @@ async fn proxy_handler(
 
                     // Simply take the existing request and mutate the uri and headers
                     *req.uri_mut() = uri.clone();
-                    if let Err(e) = adjust_proxied_headers(&mut req, &host) {
-                        warn!("Failed to adjust proxy headers: {e}");
-                        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                        return Ok(response);
-                    }
+                    adjust_backend_request_headers(&mut req, &host);
 
                     // If the backend scheme is http, adjust the original request HTTP version to 1
                     // (It seems that the HTTP2 implementation requires TLS)
@@ -352,6 +370,7 @@ async fn proxy_handler(
                         *req.version_mut() = Version::HTTP_11;
                     }
                     response = proxy_config.client.make_request(req).await;
+                    adjust_backend_response_headers(&mut response);
                     debug!(
                         "Proxied response from: {} | Status: {} | Response headers: {:?}",
                         uri,
@@ -466,15 +485,63 @@ mod tests {
     }
 
     #[test]
-    fn test_adjust_proxied_headers() {
+    fn test_read_config_yaml_unknown_field_rejected() {
+        // serde(deny_unknown_fields) — a typo in any config key should be an error,
+        // not silently ignored (e.g. "timout" instead of "timeout")
+        let yaml = r#"
+listen: "127.0.0.1:4000"
+tls:
+  key_path: "tests/self-signed-cert/test.key"
+  cert_path: "tests/self-signed-cert/test.crt"
+timout: 500
+backends: []
+"#;
+        let result: Result<Config, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_adjust_backend_request_headers() {
         let mut req = Request::new(Body::from("test"));
         req.headers_mut().insert(HOST, "test_host".parse().unwrap());
         req.headers_mut()
             .insert(PROXY_AUTHENTICATE, "true".parse().unwrap());
-        adjust_proxied_headers(&mut req, "test").unwrap();
+        adjust_backend_request_headers(&mut req, "test");
         assert_eq!(req.headers().iter().count(), 2);
         assert!(req.headers().contains_key(HOST));
         assert!(req.headers().contains_key("x-no-proxy"));
+        assert!(!req.headers().contains_key(PROXY_AUTHENTICATE));
+    }
+
+    #[test]
+    fn test_adjust_backend_response_headers() {
+        let mut res = Response::new(Body::empty());
+        res.headers_mut()
+            .insert(header::TRANSFER_ENCODING, "chunked".parse().unwrap());
+        res.headers_mut()
+            .insert(header::CONNECTION, "keep-alive".parse().unwrap());
+        res.headers_mut()
+            .insert(header::CONTENT_TYPE, "text/plain".parse().unwrap());
+        adjust_backend_response_headers(&mut res);
+        assert!(!res.headers().contains_key(header::TRANSFER_ENCODING));
+        assert!(!res.headers().contains_key(header::CONNECTION));
+        assert!(res.headers().contains_key(header::CONTENT_TYPE));
+    }
+
+    #[test]
+    fn test_remove_hop_by_hop_connection_header_names() {
+        // Connection header may list one or more hop by hop headers as a comma separated list
+        // only those headers should be removed, unlisted headers must survive
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONNECTION, "x-first, x-second".parse().unwrap());
+        headers.insert("x-first", "a".parse().unwrap());
+        headers.insert("x-second", "b".parse().unwrap());
+        headers.insert("x-third", "c".parse().unwrap()); // not listed — must survive
+        remove_hop_by_hop_headers(&mut headers);
+        assert!(!headers.contains_key(header::CONNECTION));
+        assert!(!headers.contains_key("x-first"));
+        assert!(!headers.contains_key("x-second"));
+        assert!(headers.contains_key("x-third"));
     }
 
     #[test]
