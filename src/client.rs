@@ -12,7 +12,7 @@ use tokio::time::timeout;
 
 type HttpClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Client {
     client: HttpClient,
     timeout: Duration,
