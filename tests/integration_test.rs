@@ -29,8 +29,15 @@ fn start_services() {
                     let _ = run_server("./tests/config.yaml".to_string()).await;
                 });
         });
-        // Wait for proxy and backends to bind and start accepting connections
-        thread::sleep(Duration::from_millis(100));
+        // Poll until the proxy is ready, fail after 2s
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::net::TcpStream::connect("127.0.0.1:4000").is_err() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "proxy failed to start within 2s"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     });
 }
 
