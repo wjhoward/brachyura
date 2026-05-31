@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{error::Error as StdError, time::Duration};
 
 use axum::{
     body::Body,
@@ -37,6 +37,8 @@ impl Client {
                     if e.is_connect() {
                         (StatusCode::SERVICE_UNAVAILABLE, "Cannot connect to backend")
                             .into_response()
+                    } else if e.source().is_some() {
+                        (StatusCode::BAD_GATEWAY, "Bad response from backend").into_response()
                     } else {
                         warn!("Unhandled error: {:?}", e);
                         (
@@ -75,6 +77,26 @@ mod tests {
         *request.uri_mut() = format!("{}/ok", &mock_server.uri()).parse().unwrap();
         let response = client.make_request(request).await;
         assert_eq!(response.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_client_make_request_connection_dropped() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // accept() blocks until the client connection is established
+        // client then sends the request, and the error will
+        // show up when we try and read the response
+        tokio::spawn(async move {
+            let (_connection, _) = listener.accept().await.unwrap();
+            // __connection dropped here, server closes connection without sending a response
+        });
+
+        let client = Client::new(Some(5_000)); // 5 000 ms timeout
+        let mut request = Request::new(Body::empty());
+        *request.uri_mut() = format!("http://{addr}/test").parse().unwrap();
+        let response = client.make_request(request).await;
+        assert_eq!(response.status(), 502);
     }
 
     #[tokio::test]

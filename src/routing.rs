@@ -15,7 +15,7 @@ pub fn router(
     match backend {
         Backend::Single { location, .. } => Some(location.clone()),
         Backend::LoadBalanced { name, locations } => {
-            let backend_state = proxy_state.backends.get(name)?.as_ref()?;
+            let backend_state = proxy_state.backends.get(name)?;
             round_robin_select(locations, backend_state)
         }
     }
@@ -74,12 +74,7 @@ mod tests {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         let proxy_state = RoutingState::new(&config);
         let backend_name = String::from("test-lb.home");
-        let backend_state = proxy_state
-            .backends
-            .get(&backend_name)
-            .unwrap()
-            .as_ref()
-            .unwrap();
+        let backend_state = proxy_state.backends.get(&backend_name).unwrap();
         let backend_locations = match &config.backends[1] {
             Backend::LoadBalanced { locations, .. } => locations,
             _ => panic!("expected load balanced backend at index 1"),
@@ -102,12 +97,7 @@ mod tests {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         let proxy_state = RoutingState::new(&config);
         let backend_name = String::from("test-lb.home");
-        let backend_state = proxy_state
-            .backends
-            .get(&backend_name)
-            .unwrap()
-            .as_ref()
-            .unwrap();
+        let backend_state = proxy_state.backends.get(&backend_name).unwrap();
         let single_location = vec!["127.0.0.1:8000".to_string()];
 
         // With a single backend every call should return that backend
@@ -124,12 +114,7 @@ mod tests {
         let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
         let proxy_state = RoutingState::new(&config);
         let backend_name = String::from("test-lb.home");
-        let backend_state = proxy_state
-            .backends
-            .get(&backend_name)
-            .unwrap()
-            .as_ref()
-            .unwrap();
+        let backend_state = proxy_state.backends.get(&backend_name).unwrap();
 
         assert_eq!(round_robin_select(&[], backend_state), None);
     }

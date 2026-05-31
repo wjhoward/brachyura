@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     env,
     net::{IpAddr, SocketAddr},
@@ -42,8 +42,9 @@ use crate::{
 };
 
 #[allow(clippy::declare_interior_mutable_const)]
-const HOP_BY_HOP_HEADERS: [HeaderName; 8] = [
+const HOP_BY_HOP_HEADERS: [HeaderName; 9] = [
     HeaderName::from_static("keep-alive"),
+    HeaderName::from_static("proxy-connection"), // non standard, sent by HTTP/1.0 clients
     header::TRANSFER_ENCODING,
     header::TE,
     header::CONNECTION,
@@ -120,26 +121,21 @@ pub struct BackendState {
 
 #[derive(Debug)]
 pub struct RoutingState {
-    backends: HashMap<String, Option<BackendState>>,
+    backends: HashMap<String, BackendState>, // keyed by name, LoadBalanced backends only
 }
 
 impl RoutingState {
     fn new(config: &Config) -> RoutingState {
-        let mut backends: HashMap<String, Option<BackendState>> = HashMap::new();
+        let mut backends: HashMap<String, BackendState> = HashMap::new();
 
         for backend in &config.backends {
-            match backend {
-                Backend::Single { name, .. } => {
-                    backends.insert(name.clone(), None);
-                }
-                Backend::LoadBalanced { name, .. } => {
-                    backends.insert(
-                        name.clone(),
-                        Some(BackendState {
-                            rr_count: AtomicUsize::new(0),
-                        }),
-                    );
-                }
+            if let Backend::LoadBalanced { name, .. } = backend {
+                backends.insert(
+                    name.clone(),
+                    BackendState {
+                        rr_count: AtomicUsize::new(0),
+                    },
+                );
             }
         }
         RoutingState { backends }
@@ -157,11 +153,23 @@ pub struct ResponseContext {
     backend_location: String,
 }
 
+fn validate_config(config: &Config) -> Result<()> {
+    let mut seen = HashSet::new();
+    for backend in &config.backends {
+        let name = backend.name();
+        if !seen.insert(name) {
+            anyhow::bail!("duplicate backend name: {}", name);
+        }
+    }
+    Ok(())
+}
+
 // Not async — uses blocking std::fs I/O which is acceptable as this runs once at startup
 fn read_proxy_config_yaml(yaml_path: String) -> Result<Config> {
     let file = std::fs::File::open(&yaml_path)
         .with_context(|| format!("Unable to open config file: {yaml_path}"))?;
     let deserialized: Config = serde_yaml::from_reader(file)?;
+    validate_config(&deserialized)?;
     Ok(deserialized)
 }
 
@@ -485,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_config_yaml_unknown_field_rejected() {
+    fn test_read_config_yaml_unknown_field_errors() {
         // serde(deny_unknown_fields) — a typo in any config key should be an error,
         // not silently ignored (e.g. "timout" instead of "timeout")
         let yaml = r#"
@@ -498,6 +506,25 @@ backends: []
 "#;
         let result: Result<Config, _> = serde_yaml::from_str(yaml);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_config_yaml_duplicate_backend_name_errors() {
+        let yaml = r#"
+listen: "127.0.0.1:4000"
+tls:
+  key_path: "tests/self-signed-cert/test.key"
+  cert_path: "tests/self-signed-cert/test.crt"
+backends:
+  - name: "test.home"
+    backend_type: "single"
+    location: "127.0.0.1:8000"
+  - name: "test.home"
+    backend_type: "single"
+    location: "127.0.0.1:8001"
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(validate_config(&config).is_err());
     }
 
     #[test]
