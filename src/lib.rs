@@ -10,10 +10,12 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{
+        header,
+        header::{CONTENT_TYPE, HOST},
         uri::{Authority, Uri},
-        HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Version,
+        HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Version,
     },
     middleware,
     routing::any,
@@ -21,11 +23,6 @@ use axum::{
 };
 use axum_server::{tls_rustls::RustlsConfig, Handle};
 use env_logger::Env;
-use hyper::http::{
-    header,
-    header::{CONTENT_TYPE, HOST},
-    HeaderName,
-};
 use log::{debug, info, warn};
 use serde::Deserialize;
 use tokio::signal;
@@ -67,6 +64,7 @@ struct Config {
     listen: SocketAddr,
     tls: TlsConfig,
     timeout_ms: Option<u64>,
+    drain_timeout_secs: Option<u64>,
     backends: Vec<Backend>,
 }
 
@@ -104,17 +102,6 @@ impl std::fmt::Display for Backend {
 }
 
 #[derive(Debug)]
-struct ProxyConfig {
-    config: Config,
-    client: Client,
-}
-impl ProxyConfig {
-    fn new(config: Config, client: Client) -> ProxyConfig {
-        ProxyConfig { config, client }
-    }
-}
-
-#[derive(Debug)]
 pub(crate) struct BackendState {
     rr_count: AtomicUsize,
 }
@@ -144,7 +131,8 @@ impl RoutingState {
 
 #[derive(Clone)]
 struct ProxyState {
-    proxy_config: Arc<ProxyConfig>,
+    config: Arc<Config>,
+    client: Client,
     routing_state: Arc<RoutingState>,
 }
 
@@ -165,8 +153,8 @@ fn validate_config(config: &Config) -> Result<()> {
 }
 
 // Not async — uses blocking std::fs I/O which is acceptable as this runs once at startup
-fn read_proxy_config_yaml(yaml_path: String) -> Result<Config> {
-    let file = std::fs::File::open(&yaml_path)
+fn read_proxy_config_yaml(yaml_path: &str) -> Result<Config> {
+    let file = std::fs::File::open(yaml_path)
         .with_context(|| format!("Unable to open config file: {yaml_path}"))?;
     let deserialized: Config = serde_yaml::from_reader(file)?;
     validate_config(&deserialized)?;
@@ -191,7 +179,11 @@ fn remove_hop_by_hop_headers(headers: &mut HeaderMap) {
     }
 }
 
-fn adjust_backend_request_headers(req: &mut Request<Body>, host_authority: &str) {
+fn adjust_backend_request_headers(
+    req: &mut Request<Body>,
+    host_authority: &str,
+    client_ip: IpAddr,
+) {
     // Remove hop by hop headers before forwarding to the backend
     remove_hop_by_hop_headers(req.headers_mut());
 
@@ -205,6 +197,11 @@ fn adjust_backend_request_headers(req: &mut Request<Body>, host_authority: &str)
     // Mark as already proxied to prevent forwarding loops
     req.headers_mut()
         .insert("x-no-proxy", HeaderValue::from_static("true"));
+
+    // Inform the backend of the original client IP
+    let ip_header = HeaderValue::from_str(&client_ip.to_string())
+        .expect("IP address is always a valid HeaderValue");
+    req.headers_mut().insert("x-forwarded-for", ip_header);
 }
 
 fn adjust_backend_response_headers(res: &mut Response<Body>) {
@@ -258,10 +255,12 @@ fn error_response(status: StatusCode, message: &str) -> Response<Body> {
 
 async fn proxy_handler(
     State(state): State<ProxyState>,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     mut req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
     let ProxyState {
-        proxy_config,
+        config,
+        client,
         routing_state,
     } = state;
     debug!(
@@ -326,11 +325,7 @@ async fn proxy_handler(
         // Proxy the request
         (_, _, false, Some(host)) => {
             debug!("Standard request proxy");
-            let backend_location = router(
-                &proxy_config.config.backends,
-                routing_state.clone(),
-                host.clone(),
-            );
+            let backend_location = router(&config.backends, routing_state.clone(), &host);
 
             match backend_location {
                 None => error_response(StatusCode::NOT_FOUND, ""),
@@ -361,11 +356,11 @@ async fn proxy_handler(
                     // Simply take the existing request and mutate the uri and headers
                     debug!("Proxying request to: {}", uri);
                     *req.uri_mut() = uri;
-                    adjust_backend_request_headers(&mut req, &host);
+                    adjust_backend_request_headers(&mut req, &host, client_addr.ip());
 
                     // Downgrade to HTTP/1.1 for backend connections
                     *req.version_mut() = Version::HTTP_11;
-                    let mut response = proxy_config.client.make_request(req).await;
+                    let mut response = client.make_request(req).await;
                     adjust_backend_response_headers(&mut response);
                     debug!(
                         "Proxied response | Status: {} | Headers: {:?}",
@@ -409,7 +404,7 @@ async fn shutdown_signal() {
     sigint.await;
 }
 
-pub async fn run_server(config_path: String) -> Result<()> {
+pub async fn run_server(config_path: &str) -> Result<()> {
     let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
 
     let config = read_proxy_config_yaml(config_path)?;
@@ -420,22 +415,25 @@ pub async fn run_server(config_path: String) -> Result<()> {
 
     let routing_state = Arc::new(RoutingState::new(&config));
 
-    let proxy_config = Arc::new(ProxyConfig::new(config, client));
+    let config = Arc::new(config);
 
     let current_dir = env::current_dir().context("Unable to determine current directory")?;
     let tls_config = RustlsConfig::from_pem_file(
-        current_dir.join(&proxy_config.config.tls.cert_path),
-        current_dir.join(&proxy_config.config.tls.key_path),
+        current_dir.join(&config.tls.cert_path),
+        current_dir.join(&config.tls.key_path),
     )
     .await
     .context("Failed to load TLS config")?;
 
-    for backend in &proxy_config.config.backends {
+    for backend in &config.backends {
         info!("backend: {backend}");
     }
 
+    let drain_timeout_secs = config.drain_timeout_secs.unwrap_or(10);
+
     let proxy_state = ProxyState {
-        proxy_config,
+        config,
+        client,
         routing_state,
     };
 
@@ -450,14 +448,14 @@ pub async fn run_server(config_path: String) -> Result<()> {
     tokio::spawn(async move {
         shutdown_signal().await;
         info!("Shutdown signal received, draining in flight requests");
-        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(30)));
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(drain_timeout_secs)));
     });
 
     info!("proxy listening on {}", listen_address);
 
     axum_server::bind_rustls(listen_address, tls_config)
         .handle(handle)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .context("Server error")?;
 
@@ -476,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_read_config_yaml() {
-        let data = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let data = read_proxy_config_yaml("tests/config.yaml").unwrap();
         assert_eq!(data.backends[0].name(), "test.home");
     }
 
@@ -521,10 +519,11 @@ backends:
         req.headers_mut().insert(HOST, "test_host".parse().unwrap());
         req.headers_mut()
             .insert(PROXY_AUTHENTICATE, "true".parse().unwrap());
-        adjust_backend_request_headers(&mut req, "test");
-        assert_eq!(req.headers().iter().count(), 2);
+        adjust_backend_request_headers(&mut req, "test", "127.0.0.1".parse().unwrap());
+        assert_eq!(req.headers().iter().count(), 3);
         assert!(req.headers().contains_key(HOST));
         assert!(req.headers().contains_key("x-no-proxy"));
+        assert!(req.headers().contains_key("x-forwarded-for"));
         assert!(!req.headers().contains_key(PROXY_AUTHENTICATE));
     }
 

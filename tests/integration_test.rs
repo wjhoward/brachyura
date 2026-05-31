@@ -26,7 +26,7 @@ fn start_services() {
                         init_mock_backend("127.0.0.1:8000", "This is the mock backend!").await;
                     let _backend2 =
                         init_mock_backend("127.0.0.1:8001", "This is the mock backend 2!").await;
-                    let _ = run_server("./tests/config.yaml".to_string()).await;
+                    let _ = run_server("./tests/config.yaml").await;
                 });
         });
         // Poll until the proxy is ready, fail after 2s

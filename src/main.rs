@@ -4,6 +4,5 @@ use brachyura::run_server;
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let config_path = String::from("./config.yaml");
-    run_server(config_path).await
+    run_server("./config.yaml").await
 }

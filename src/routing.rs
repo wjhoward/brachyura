@@ -6,11 +6,11 @@ use super::{Backend, BackendState, RoutingState};
 pub fn router(
     backends_config: &[Backend],
     routing_state: Arc<RoutingState>,
-    host_authority: String,
+    host_authority: &str,
 ) -> Option<String> {
     // Matches a given host header or authority with a backend
     // Performs load balancing when configured
-    let backend = match_backend(backends_config, &host_authority)?;
+    let backend = match_backend(backends_config, host_authority)?;
 
     match backend {
         Backend::Single { location, .. } => Some(location.clone()),
@@ -54,26 +54,26 @@ mod tests {
 
     #[test]
     fn test_router_single_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
 
         let proxy_state = Arc::new(RoutingState::new(&config));
 
-        let backend = router(&config.backends, proxy_state, "test.home".to_string());
+        let backend = router(&config.backends, proxy_state, "test.home");
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
     #[test]
     fn test_router_loadbalanced_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
         let proxy_state = Arc::new(RoutingState::new(&config));
 
-        let backend = router(&config.backends, proxy_state, "test-lb.home".to_string());
+        let backend = router(&config.backends, proxy_state, "test-lb.home");
         assert_eq!(backend.unwrap(), "127.0.0.1:8000")
     }
 
     #[test]
     fn test_round_robin_select() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
         let proxy_state = RoutingState::new(&config);
         let backend_name = String::from("test-lb.home");
         let backend_state = proxy_state.backends.get(&backend_name).unwrap();
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_round_robin_select_single_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
         let proxy_state = RoutingState::new(&config);
         let backend_name = String::from("test-lb.home");
         let backend_state = proxy_state.backends.get(&backend_name).unwrap();
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_round_robin_select_empty_locations() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
         let proxy_state = RoutingState::new(&config);
         let backend_name = String::from("test-lb.home");
         let backend_state = proxy_state.backends.get(&backend_name).unwrap();
@@ -123,10 +123,10 @@ mod tests {
 
     #[test]
     fn test_router_case_insensitive_host() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
         let proxy_state = Arc::new(RoutingState::new(&config));
 
-        let backend = router(&config.backends, proxy_state, "TEST.HOME".to_string());
+        let backend = router(&config.backends, proxy_state, "TEST.HOME");
         assert_eq!(backend.unwrap(), "127.0.0.1:8000");
     }
 
@@ -142,10 +142,10 @@ mod tests {
 
     #[test]
     fn test_unknown_backend() {
-        let config = read_proxy_config_yaml("tests/config.yaml".to_string()).unwrap();
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
         let proxy_state = Arc::new(RoutingState::new(&config));
 
-        let backend = router(&config.backends, proxy_state, "unknown.host".to_string());
+        let backend = router(&config.backends, proxy_state, "unknown.host");
         assert_eq!(backend, None);
     }
 }
