@@ -4,7 +4,7 @@ tls:
   key_path: "tests/self-signed-cert/test.key"
   cert_path: "tests/self-signed-cert/test.crt"
 
-timeout: 500
+timeout_ms: 500
 
 backends:
   - name: "test.home"

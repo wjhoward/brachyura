@@ -9,11 +9,11 @@ use prometheus::{
 
 use crate::ResponseContext;
 
-pub static METRICS: LazyLock<Metrics> = LazyLock::new(Metrics::new);
+pub(crate) static METRICS: LazyLock<Metrics> = LazyLock::new(Metrics::new);
 
-pub struct Metrics {
-    pub http_request_counter: IntCounterVec,
-    pub http_request_duration: HistogramVec,
+pub(crate) struct Metrics {
+    pub(crate) http_request_counter: IntCounterVec,
+    pub(crate) http_request_duration: HistogramVec,
 }
 
 impl Metrics {
@@ -36,7 +36,7 @@ impl Metrics {
     }
 }
 
-pub fn encode_metrics() -> Result<String, Error> {
+pub(crate) fn encode_metrics() -> Result<String, Error> {
     let mut buffer = Vec::new();
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
@@ -44,7 +44,7 @@ pub fn encode_metrics() -> Result<String, Error> {
     Ok(String::from_utf8(buffer)?)
 }
 
-pub async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
+pub(crate) async fn record_metrics(req: Request, next: Next) -> impl IntoResponse {
     let start = Instant::now();
 
     let response = next.run(req).await;

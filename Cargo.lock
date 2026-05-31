@@ -282,7 +282,6 @@ dependencies = [
  "axum",
  "axum-server",
  "env_logger",
- "http",
  "hyper",
  "hyper-util",
  "log",

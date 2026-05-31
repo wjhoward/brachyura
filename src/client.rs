@@ -13,23 +13,23 @@ use tokio::time::timeout;
 type HttpClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
 
 #[derive(Debug)]
-pub struct Client {
+pub(crate) struct Client {
     client: HttpClient,
     timeout: Duration,
 }
 
 impl Client {
-    pub fn new(timeout: Option<u64>) -> Client {
+    pub(crate) fn new(timeout_ms: Option<u64>) -> Client {
         let client: HttpClient =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
                 .build(HttpConnector::new());
         Client {
             client,
-            timeout: Duration::from_millis(timeout.unwrap_or(60_000)),
+            timeout: Duration::from_millis(timeout_ms.unwrap_or(60_000)),
         }
     }
 
-    pub async fn make_request(&self, req: Request<Body>) -> Response<Body> {
+    pub(crate) async fn make_request(&self, req: Request<Body>) -> Response<Body> {
         match timeout(self.timeout, self.client.request(req)).await {
             Ok(result) => match result {
                 Ok(response) => response.into_response(),
