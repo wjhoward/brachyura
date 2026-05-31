@@ -5,7 +5,7 @@ use super::{Backend, BackendState, RoutingState};
 
 pub fn router(
     backends_config: &[Backend],
-    proxy_state: Arc<RoutingState>,
+    routing_state: Arc<RoutingState>,
     host_authority: String,
 ) -> Option<String> {
     // Matches a given host header or authority with a backend
@@ -15,7 +15,7 @@ pub fn router(
     match backend {
         Backend::Single { location, .. } => Some(location.clone()),
         Backend::LoadBalanced { name, locations } => {
-            let backend_state = proxy_state.backends.get(name)?;
+            let backend_state = routing_state.backends.get(name)?;
             round_robin_select(locations, backend_state)
         }
     }
@@ -40,6 +40,8 @@ fn round_robin_select(
     if backend_locations.is_empty() {
         return None;
     }
+    // Relaxed ordering is sufficient as fetch_add is an atomic read-modify-write
+    // so no two threads can observe the same counter value
     let idx = backend_state.rr_count.fetch_add(1, Ordering::Relaxed) % backend_locations.len();
     Some(backend_locations[idx].clone())
 }

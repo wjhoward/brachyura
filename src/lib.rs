@@ -27,7 +27,7 @@ use hyper::http::{
     HeaderName,
 };
 use log::{debug, info, warn};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::signal;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
@@ -54,25 +54,25 @@ const HOP_BY_HOP_HEADERS: [HeaderName; 9] = [
     header::PROXY_AUTHENTICATE,
 ];
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TlsConfig {
     cert_path: String,
     key_path: String,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
     listen: SocketAddr,
     tls: TlsConfig,
-    timeout: Option<u64>,
+    timeout_ms: Option<u64>,
     backends: Vec<Backend>,
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, Eq, PartialEq, Deserialize, Clone)]
 #[serde(tag = "backend_type", rename_all = "lowercase", deny_unknown_fields)]
-pub enum Backend {
+pub(crate) enum Backend {
     Single {
         name: String,
         location: String,
@@ -115,12 +115,12 @@ impl ProxyConfig {
 }
 
 #[derive(Debug)]
-pub struct BackendState {
+pub(crate) struct BackendState {
     rr_count: AtomicUsize,
 }
 
 #[derive(Debug)]
-pub struct RoutingState {
+pub(crate) struct RoutingState {
     backends: HashMap<String, BackendState>, // keyed by name, LoadBalanced backends only
 }
 
@@ -149,7 +149,7 @@ struct ProxyState {
 }
 
 #[derive(Debug, Clone)]
-pub struct ResponseContext {
+pub(crate) struct ResponseContext {
     backend_location: String,
 }
 
@@ -246,13 +246,13 @@ fn get_host(req: &Request<Body>) -> Option<String> {
     Some(host)
 }
 
-fn error_response(
-    mut response: Response<Body>,
-    status: StatusCode,
-    message: String,
-) -> Response<Body> {
-    *response.body_mut() = Body::from(message);
+fn error_response(status: StatusCode, message: &str) -> Response<Body> {
+    let mut response = Response::new(Body::from(message.to_owned()));
     *response.status_mut() = status;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     response
 }
 
@@ -264,8 +264,6 @@ async fn proxy_handler(
         proxy_config,
         routing_state,
     } = state;
-    let mut response = Response::new(Body::empty());
-
     debug!(
         "Request version: {:?} method: {} uri: {} headers: {:?}",
         req.version(),
@@ -279,9 +277,8 @@ async fn proxy_handler(
         Version::HTTP_10 | Version::HTTP_11 | Version::HTTP_2 => {}
         _ => {
             return Ok(error_response(
-                response,
                 StatusCode::HTTP_VERSION_NOT_SUPPORTED,
-                format!("Unsupported HTTP version: {:?}", req.version()),
+                &format!("Unsupported HTTP version: {:?}", req.version()),
             ))
         }
     }
@@ -296,36 +293,34 @@ async fn proxy_handler(
         no_proxy, host_authority
     );
 
-    match (req.method(), req.uri().path(), no_proxy, host_authority) {
+    let response = match (req.method(), req.uri().path(), no_proxy, host_authority) {
         // Proxy internal endpoints
-        (&Method::GET, "/status", true, _) => {
-            *response.body_mut() = Body::from("The proxy is running");
-        }
+        (&Method::GET, "/status", true, _) => Response::new(Body::from("The proxy is running")),
         (&Method::GET, "/metrics", true, _) => match encode_metrics() {
             Ok(encoded_metrics) => {
-                *response.body_mut() = Body::from(encoded_metrics);
+                let mut response = Response::new(Body::from(encoded_metrics));
                 response.headers_mut().insert(
                     CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"),
                 );
+                response
             }
             Err(e) => {
                 warn!("Error encoding metrics: {e}");
-                *response.body_mut() = Body::from(format!("Error encoding metrics: {e}"));
-                *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Error encoding metrics: {e}"),
+                )
             }
         },
 
         // x-no-proxy request to an unknown internal path
-        (_, _, true, _) => {
-            *response.status_mut() = StatusCode::NOT_FOUND;
-        }
+        (_, _, true, _) => error_response(StatusCode::NOT_FOUND, ""),
 
         // A non internal request, but the host header has not been defined
         (_, _, false, None) => {
             debug!("Host header not defined");
-            *response.body_mut() = Body::from("Host header not defined");
-            *response.status_mut() = StatusCode::NOT_FOUND;
+            error_response(StatusCode::NOT_FOUND, "Host header not defined")
         }
 
         // Proxy the request
@@ -338,13 +333,9 @@ async fn proxy_handler(
             );
 
             match backend_location {
-                None => {
-                    *response.status_mut() = StatusCode::NOT_FOUND;
-                }
+                None => error_response(StatusCode::NOT_FOUND, ""),
                 Some(backend_location) => {
-                    // Proxy to backend
-
-                    // Scheme currently hardcoded to http (given this is a TLS terminating proxy)
+                    // Backend connections are plain HTTP — TLS is terminated at the proxy
                     let scheme = "http";
 
                     // Default to "/" if the URI has no path component
@@ -356,38 +347,35 @@ async fn proxy_handler(
 
                     let uri = match Uri::builder()
                         .scheme(scheme)
-                        .authority(backend_location.clone())
+                        .authority(backend_location.as_str())
                         .path_and_query(path_and_query)
                         .build()
                     {
                         Ok(uri) => uri,
                         Err(e) => {
                             warn!("Failed to build backend URI: {e}");
-                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                            return Ok(response);
+                            return Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, ""));
                         }
                     };
 
                     // Simply take the existing request and mutate the uri and headers
-                    *req.uri_mut() = uri.clone();
+                    debug!("Proxying request to: {}", uri);
+                    *req.uri_mut() = uri;
                     adjust_backend_request_headers(&mut req, &host);
 
-                    // If the backend scheme is http, adjust the original request HTTP version to 1
-                    // (It seems that the HTTP2 implementation requires TLS)
-                    if scheme == "http" {
-                        *req.version_mut() = Version::HTTP_11;
-                    }
-                    response = proxy_config.client.make_request(req).await;
+                    // Downgrade to HTTP/1.1 for backend connections
+                    *req.version_mut() = Version::HTTP_11;
+                    let mut response = proxy_config.client.make_request(req).await;
                     adjust_backend_response_headers(&mut response);
                     debug!(
-                        "Proxied response from: {} | Status: {} | Response headers: {:?}",
-                        uri,
+                        "Proxied response | Status: {} | Headers: {:?}",
                         response.status(),
                         response.headers()
                     );
                     response
                         .extensions_mut()
                         .insert(ResponseContext { backend_location });
+                    response
                 }
             }
         }
@@ -428,16 +416,11 @@ pub async fn run_server(config_path: String) -> Result<()> {
 
     let listen_address = config.listen;
 
-    let client = client::Client::new(config.timeout);
+    let client = client::Client::new(config.timeout_ms);
 
     let routing_state = Arc::new(RoutingState::new(&config));
 
     let proxy_config = Arc::new(ProxyConfig::new(config, client));
-
-    let proxy_state = ProxyState {
-        proxy_config: proxy_config.clone(),
-        routing_state,
-    };
 
     let current_dir = env::current_dir().context("Unable to determine current directory")?;
     let tls_config = RustlsConfig::from_pem_file(
@@ -450,6 +433,11 @@ pub async fn run_server(config_path: String) -> Result<()> {
     for backend in &proxy_config.config.backends {
         info!("backend: {backend}");
     }
+
+    let proxy_state = ProxyState {
+        proxy_config,
+        routing_state,
+    };
 
     let app = Router::new()
         .route("/", any(proxy_handler))
@@ -674,12 +662,7 @@ backends:
 
     #[tokio::test]
     async fn test_error_response() {
-        let original_response = Response::new(Body::from("test"));
-        let response = error_response(
-            original_response,
-            StatusCode::BAD_REQUEST,
-            "test error".to_string(),
-        );
+        let response = error_response(StatusCode::BAD_REQUEST, "test error");
         assert_eq!(response.status(), 400);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
