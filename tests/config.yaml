@@ -15,3 +15,6 @@ backends:
     locations:
       - "127.0.0.1:8000"
       - "127.0.0.1:8001"
+  - name: "none.home"
+    backend_type: "single"
+    location: "127.0.0.1:9000"

@@ -100,6 +100,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_client_make_request_connection_refused() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Bind first to get a guaranteed free port from the OS, then drop the listener
+        // so the port is closed before the client attempts to connect
+        drop(listener);
+
+        let client = Client::new(Some(5_000));
+        let mut request = Request::new(Body::empty());
+        *request.uri_mut() = format!("http://{addr}/test").parse().unwrap();
+        let response = client.make_request(request).await;
+        assert_eq!(response.status(), 503);
+    }
+
+    #[tokio::test]
     async fn test_client_make_request_timeout() {
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))

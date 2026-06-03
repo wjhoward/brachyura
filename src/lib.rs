@@ -479,6 +479,13 @@ mod tests {
     }
 
     #[test]
+    fn test_read_config_yaml_missing_file_errors() {
+        // A non existent config path should return an error, not panic
+        let result = read_proxy_config_yaml("tests/does_not_exist.yaml");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_read_config_yaml_unknown_field_errors() {
         // serde(deny_unknown_fields) — a typo in any config key should be an error,
         // not silently ignored (e.g. "timout" instead of "timeout")
@@ -514,6 +521,33 @@ backends:
     }
 
     #[test]
+    fn test_routing_state_excludes_single_backends() {
+        // Only LoadBalanced backends need round robin state, single backends should be absent
+        let config = read_proxy_config_yaml("tests/config.yaml").unwrap();
+        let routing_state = RoutingState::new(&config);
+        assert!(routing_state.backends.contains_key("test-lb.home"));
+        assert!(!routing_state.backends.contains_key("test.home"));
+    }
+
+    #[test]
+    fn test_backend_display() {
+        let single = Backend::Single {
+            name: "test.home".to_string(),
+            location: "127.0.0.1:8000".to_string(),
+        };
+        assert_eq!(single.to_string(), "test.home -> 127.0.0.1:8000");
+
+        let load_balanced = Backend::LoadBalanced {
+            name: "test-lb.home".to_string(),
+            locations: vec!["127.0.0.1:8000".to_string(), "127.0.0.1:8001".to_string()],
+        };
+        assert_eq!(
+            load_balanced.to_string(),
+            "test-lb.home -> [127.0.0.1:8000, 127.0.0.1:8001] (load balanced)"
+        );
+    }
+
+    #[test]
     fn test_adjust_backend_request_headers() {
         let mut req = Request::new(Body::from("test"));
         req.headers_mut().insert(HOST, "test_host".parse().unwrap());
@@ -523,7 +557,7 @@ backends:
         assert_eq!(req.headers().iter().count(), 3);
         assert!(req.headers().contains_key(HOST));
         assert!(req.headers().contains_key("x-no-proxy"));
-        assert!(req.headers().contains_key("x-forwarded-for"));
+        assert_eq!(req.headers().get("x-forwarded-for").unwrap(), "127.0.0.1");
         assert!(!req.headers().contains_key(PROXY_AUTHENTICATE));
     }
 
@@ -558,11 +592,13 @@ backends:
         assert!(headers.contains_key("x-third"));
     }
 
+    // get_host reads the Host header first, falling back to the URI authority
+    // The following tests are grouped by which of those two branches they exercise
+
     #[test]
-    fn test_get_host_http1() {
+    fn test_get_host_from_header() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_10)
             .uri("https://localhost:4000/test")
             .header(HOST, "test.home")
             .body(Body::from("test"))
@@ -572,24 +608,11 @@ backends:
     }
 
     #[test]
-    fn test_get_host_http1_none() {
+    fn test_get_host_from_header_removes_port() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_10)
             .uri("https://localhost:4000/test")
-            .body(Body::from("test"))
-            .unwrap();
-        let host = get_host(&request);
-        assert_eq!(host, None);
-    }
-
-    #[test]
-    fn test_get_host_http2() {
-        let request = Request::builder()
-            .method("GET")
-            .version(Version::HTTP_2)
-            .uri("https://localhost:4000/test")
-            .header(HOST, "test.home")
+            .header(HOST, "test.home:8080")
             .body(Body::from("test"))
             .unwrap();
         let host = get_host(&request);
@@ -597,11 +620,11 @@ backends:
     }
 
     #[test]
-    fn test_get_host_http2_none() {
+    fn test_get_host_from_header_localhost() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_2)
-            .uri("https://localhost:4000/test")
+            .uri("https://127.0.0.1:4000/test")
+            .header(HOST, "localhost")
             .body(Body::from("test"))
             .unwrap();
         let host = get_host(&request);
@@ -609,10 +632,33 @@ backends:
     }
 
     #[test]
-    fn test_get_host_http1_ipv6_ip() {
+    fn test_get_host_from_header_localhost_case_insensitive() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_11)
+            .uri("https://127.0.0.1:4000/test")
+            .header(HOST, "LOCALHOST")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host, None);
+    }
+
+    #[test]
+    fn test_get_host_from_header_ipv4() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("https://127.0.0.1:4000/test")
+            .header(HOST, "127.0.0.1")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host, None);
+    }
+
+    #[test]
+    fn test_get_host_from_header_ipv6() {
+        let request = Request::builder()
+            .method("GET")
             .uri("https://[::1]:4000/test")
             .header(HOST, "[::1]:4000")
             .body(Body::from("test"))
@@ -622,11 +668,21 @@ backends:
     }
 
     #[test]
-    fn test_get_host_http2_ipv6_ip() {
+    fn test_get_host_from_uri_authority() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_2)
-            .uri("https://[::1]:4000/test")
+            .uri("https://test.home:4000/test")
+            .body(Body::from("test"))
+            .unwrap();
+        let host = get_host(&request);
+        assert_eq!(host.unwrap(), "test.home");
+    }
+
+    #[test]
+    fn test_get_host_from_uri_authority_localhost() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("https://localhost:4000/test")
             .body(Body::from("test"))
             .unwrap();
         let host = get_host(&request);
@@ -634,35 +690,35 @@ backends:
     }
 
     #[test]
-    fn test_get_host_http1_with_port() {
+    fn test_get_host_from_uri_authority_ipv4() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_11)
-            .uri("https://localhost:4000/test")
-            .header(HOST, "test.home:8080")
+            .uri("https://127.0.0.1:4000/test")
             .body(Body::from("test"))
             .unwrap();
         let host = get_host(&request);
-        assert_eq!(host.unwrap(), "test.home");
+        assert_eq!(host, None);
     }
 
     #[test]
-    fn test_get_host_http2_with_port() {
+    fn test_get_host_from_uri_authority_ipv6() {
         let request = Request::builder()
             .method("GET")
-            .version(Version::HTTP_2)
-            .uri("https://localhost:4000/test")
-            .header(HOST, "test.home:8080")
+            .uri("https://[::1]:4000/test")
             .body(Body::from("test"))
             .unwrap();
         let host = get_host(&request);
-        assert_eq!(host.unwrap(), "test.home");
+        assert_eq!(host, None);
     }
 
     #[tokio::test]
     async fn test_error_response() {
         let response = error_response(StatusCode::BAD_REQUEST, "test error");
         assert_eq!(response.status(), 400);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
             .unwrap();
