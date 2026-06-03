@@ -4,14 +4,17 @@ tls:
   key_path: "tests/self-signed-cert/test.key"
   cert_path: "tests/self-signed-cert/test.crt"
 
-timeout: 1000
+timeout_ms: 1000
 
 backends:
   - name: "prometheus.home"
+    backend_type: "single"
     location: "127.0.0.1:9090"
   - name: "grafana.home"
+    backend_type: "single"
     location: "127.0.0.1:3000"
   - name: "backend.home"
+    backend_type: "single"
     location: "127.0.0.1:10000"
   - name: "test-lb.home"
     backend_type: "loadbalanced"
