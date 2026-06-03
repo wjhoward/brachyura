@@ -185,6 +185,17 @@ async fn http1_get_no_proxy_header_metrics() {
 }
 
 #[tokio::test]
+async fn http1_get_no_proxy_header_unknown_path() {
+    start_services();
+
+    // Send an internal request to a path that is not handled by the proxy
+    let resp = http_request("http1", "https://127.0.0.1:4000/unknown", None, true, None).await;
+
+    // In this case the proxy should respond with a 404
+    assert_response(resp, 404, Some("")).await;
+}
+
+#[tokio::test]
 async fn http1_head() {
     start_services();
 
@@ -268,6 +279,78 @@ async fn http2_get_no_host_header() {
 }
 
 #[tokio::test]
+async fn http1_get_unknown_host() {
+    start_services();
+
+    // Send a request to the proxy with a host header that does not match any backend
+    let resp = http_request(
+        "http1",
+        "https://127.0.0.1:4000/test",
+        Some("unknown.home"),
+        false,
+        None,
+    )
+    .await;
+
+    // In this case the proxy should respond with a 404
+    assert_response(resp, 404, Some("")).await;
+}
+
+#[tokio::test]
+async fn http2_get_unknown_host() {
+    start_services();
+
+    // Send a request to the proxy with a host header that does not match any backend
+    let resp = http_request(
+        "http2",
+        "https://127.0.0.1:4000/test",
+        Some("unknown.home"),
+        false,
+        None,
+    )
+    .await;
+
+    // In this case the proxy should respond with a 404
+    assert_response(resp, 404, Some("")).await;
+}
+
+#[tokio::test]
+async fn http1_get_backend_unreachable() {
+    start_services();
+
+    // Send a request to a backend that is not listening
+    let resp = http_request(
+        "http1",
+        "https://127.0.0.1:4000/test",
+        Some("none.home"),
+        false,
+        None,
+    )
+    .await;
+
+    // In this case the proxy should respond with a 503
+    assert_response(resp, 503, Some("Cannot connect to backend")).await;
+}
+
+#[tokio::test]
+async fn http2_get_backend_unreachable() {
+    start_services();
+
+    // Send a request to a backend that is not listening
+    let resp = http_request(
+        "http2",
+        "https://127.0.0.1:4000/test",
+        Some("none.home"),
+        false,
+        None,
+    )
+    .await;
+
+    // In this case the proxy should respond with a 503
+    assert_response(resp, 503, Some("Cannot connect to backend")).await;
+}
+
+#[tokio::test]
 async fn http2_get_no_proxy_header_status() {
     start_services();
 
@@ -299,6 +382,17 @@ async fn http2_get_no_proxy_header_metrics() {
     let body = response.bytes().await.unwrap();
     assert_eq!(status, 200);
     assert!(body.starts_with(b"# HELP http_request_duration_seconds"));
+}
+
+#[tokio::test]
+async fn http2_get_no_proxy_header_unknown_path() {
+    start_services();
+
+    // Send an internal request to a path that is not handled by the proxy
+    let resp = http_request("http2", "https://127.0.0.1:4000/unknown", None, true, None).await;
+
+    // In this case the proxy should respond with a 404
+    assert_response(resp, 404, Some("")).await;
 }
 
 #[tokio::test]
@@ -359,28 +453,26 @@ async fn http2_put() {
 async fn load_balancing_round_robin() {
     start_services();
 
-    // Response from the first mock backend
-    let resp = http_request(
-        "http1",
-        "https://127.0.0.1:4000/test",
-        Some("test-lb.home"),
-        false,
-        None,
-    )
-    .await;
+    // Make enough requests to guarantee both backends are hit regardless of
+    // where the round robin counter starts
+    let mut bodies = std::collections::HashSet::new();
+    for _ in 0..4 {
+        let resp = http_request(
+            "http1",
+            "https://127.0.0.1:4000/test",
+            Some("test-lb.home"),
+            false,
+            None,
+        )
+        .await;
+        let response = resp.unwrap();
+        assert_eq!(response.status(), 200);
+        bodies.insert(response.text().await.unwrap());
+    }
 
-    assert_response(resp, 200, Some("This is the mock backend!")).await;
-
-    // Response from the second mock backend
-    let resp = http_request(
-        "http1",
-        "https://127.0.0.1:4000/test",
-        Some("test-lb.home"),
-        false,
-        None,
-    )
-    .await;
-    assert_response(resp, 200, Some("This is the mock backend 2!")).await;
+    // Both backends should have received at least one request
+    assert!(bodies.contains("This is the mock backend!"));
+    assert!(bodies.contains("This is the mock backend 2!"));
 }
 
 #[tokio::test]
