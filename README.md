@@ -116,7 +116,8 @@ curl -v --http1.1  https://localhost:4000/ -H "Host: origin.home" --insecure
 >
 * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
 <
-This is the Python origin server, listening on port: 10000 request HTTP version: HTTP/1.1
+This is the Python origin server, listening on port: 10000
+request HTTP version: HTTP/1.1
 ```
 
 **HTTP 2 client example**
@@ -131,7 +132,8 @@ curl -v --http2  https://localhost:4000/ -H "Host: origin.home" --insecure
 >
 * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
 <
-This is the Python origin server, listening on port: 10000 request HTTP version: HTTP/1.1
+This is the Python origin server, listening on port: 10000
+request HTTP version: HTTP/1.1
 ```
 
 You will notice that the origin server reports an HTTP 1.1 protocol, this is due to the code currently downgrading the downstream connection, see the code for more details.
