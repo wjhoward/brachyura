@@ -13,7 +13,7 @@ backends:
   - name: "grafana.home"
     backend_type: "single"
     location: "127.0.0.1:3000"
-  - name: "backend.home"
+  - name: "origin.home"
     backend_type: "single"
     location: "127.0.0.1:10000"
   - name: "test-lb.home"

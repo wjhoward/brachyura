@@ -7,17 +7,17 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.95"
 axum = { version = "0.8.1", features = ["http2"] }
-axum-server = { version = "0.7.1", features = ["tls-rustls"] }
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 env_logger = "0.11.6"
 hyper = { version = "1.5.2", features = ["full"] }
 hyper-util = { version = "0.1.10", features = ["client-legacy"] }
 log = "0.4.25"
-prometheus = "0.13.4"
+prometheus = "0.14.0"
 rustls = { version = "0.23.21", features = ["ring"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9.34"
 tokio = { version = "1.43.0", features = ["full"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12.12", features = ["rustls-tls"] }
+reqwest = { version = "0.13.4", features = ["rustls"] }
 wiremock = "0.6"
