@@ -7,8 +7,8 @@ use axum::{
 };
 use hyper::StatusCode;
 use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
-use log::warn;
 use tokio::time::timeout;
+use tracing::warn;
 
 type HttpClient = hyper_util::client::legacy::Client<HttpConnector, Body>;
 
