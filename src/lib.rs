@@ -22,20 +22,21 @@ use axum::{
     Router,
 };
 use axum_server::{tls_rustls::RustlsConfig, Handle};
-use env_logger::Env;
-use log::{debug, info, warn};
 use serde::Deserialize;
 use tokio::signal;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
+use tracing::{debug, info, warn};
 
 mod client;
 mod metrics;
 mod routing;
+mod telemetry;
 use crate::{
     client::Client,
     metrics::{encode_metrics, record_metrics},
     routing::router,
+    telemetry::trace_request,
 };
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -405,7 +406,7 @@ async fn shutdown_signal() {
 }
 
 pub async fn run_server(config_path: &str) -> Result<()> {
-    let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
+    let tracer_provider = telemetry::init();
 
     let config = read_proxy_config_yaml(config_path)?;
 
@@ -441,6 +442,9 @@ pub async fn run_server(config_path: &str) -> Result<()> {
         .route("/", any(proxy_handler))
         .route("/{*wildcard}", any(proxy_handler))
         .route_layer(middleware::from_fn(record_metrics))
+        // axum runs layers bottom to top, so adding this last makes it the
+        // outermost layer, wrapping metrics and the handler in the request span
+        .route_layer(middleware::from_fn(trace_request))
         .with_state(proxy_state);
 
     let handle = Handle::new();
@@ -453,13 +457,18 @@ pub async fn run_server(config_path: &str) -> Result<()> {
 
     info!("proxy listening on {}", listen_address);
 
-    axum_server::bind_rustls(listen_address, tls_config)
+    let result = axum_server::bind_rustls(listen_address, tls_config)
         .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
-        .context("Server error")?;
+        .context("Server error");
 
-    Ok(())
+    // Flush any buffered spans before exiting, regardless of how the server stopped
+    if let Some(provider) = tracer_provider {
+        let _ = provider.shutdown();
+    }
+
+    result
 }
 
 #[cfg(test)]
