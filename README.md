@@ -14,14 +14,16 @@ I use Nginx in my home lab for reverse proxying and TLS termination. The goal of
 * Host header based routing to backends
 * Round robin load balancing across multiple backends
 * Prometheus metrics endpoint
+* OpenTelemetry trace export over OTLP (viewable in Jaeger)
 * Graceful shutdown with a configurable connection drain timeout
 * Sets X-Forwarded-For on proxied requests
 * HTTP/1.1 and HTTP/2 support from clients
 
 ## Quick Start
 The repo contains a local [docker compose](https://github.com/docker/compose) based environment with example backend services, [Prometheus](https://github.com/prometheus/prometheus
-) and [Grafana](https://github.com/grafana/grafana
-) (for monitoring), all pre configured and including a Grafana dashboard.
+), [Grafana](https://github.com/grafana/grafana
+) and [Jaeger](https://github.com/jaegertracing/jaeger
+) (for monitoring and tracing), all pre configured and including a Grafana dashboard.
 
 Running `./local_run.sh` will start up the containers and run the proxy:
 
@@ -37,6 +39,8 @@ To access Grafana/Prometheus via the proxy you need to override your host header
 ```
 
 Then browse to `https://prometheus.home:4000/` or `https://grafana.home:4000/`. There will be a certificate error as this is configured to use the example self signed certs in the repo.
+
+Request traces are exported to Jaeger, browse to `http://localhost:16686` and select the `brachyura` service to view them.
 
 
 ## Configuration
@@ -86,6 +90,14 @@ The proxy exposes two internal endpoints which are served directly rather than p
 Example:
 
     curl -H "x-no-proxy: true" https://127.0.0.1:4000/status --insecure
+
+---
+
+## Tracing
+
+The proxy creates a span per request and can export traces via OpenTelemetry. Export is controlled by the `OTEL_TRACES_EXPORTER` environment variable, which is unset by default so nothing is exported. Set it to `stdout` to write spans to stdout for local debugging, or `otlp` to export over OTLP/gRPC to a collector such as Jaeger.
+
+The OTLP endpoint defaults to `localhost:4317` and can be overridden with the standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable. `./local_run.sh` sets `OTEL_TRACES_EXPORTER=otlp` and runs a Jaeger container, so traces are viewable at `http://localhost:16686`.
 
 ---
 
