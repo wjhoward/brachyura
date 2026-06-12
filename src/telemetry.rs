@@ -14,9 +14,45 @@
 
 use axum::{extract::Request, middleware::Next, response::Response};
 use opentelemetry::trace::TracerProvider;
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
 use tracing::Instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Identifies this service in exported traces (otherwise spans show as
+/// "unknown_service").
+fn resource() -> Resource {
+    Resource::builder().with_service_name("brachyura").build()
+}
+
+/// Builds a tracer provider for the configured exporter, or None when export is
+/// disabled. Separate from init so the exporter selection can be unit tested
+/// without installing the global subscriber.
+fn build_provider(exporter: Option<&str>) -> Option<SdkTracerProvider> {
+    match exporter {
+        // Write each finished span to stdout, useful for local debugging with no collector
+        Some("stdout") => Some(
+            SdkTracerProvider::builder()
+                .with_simple_exporter(opentelemetry_stdout::SpanExporter::default())
+                .with_resource(resource())
+                .build(),
+        ),
+        // Batch and export spans over OTLP/gRPC, defaults to localhost:4317 (e.g. Jaeger)
+        Some("otlp") => {
+            let exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .build()
+                .expect("failed to build OTLP exporter");
+            Some(
+                SdkTracerProvider::builder()
+                    .with_batch_exporter(exporter)
+                    .with_resource(resource())
+                    .build(),
+            )
+        }
+        // No exporter configured, logs only
+        _ => None,
+    }
+}
 
 /// Installs the global tracing subscriber.
 ///
@@ -30,34 +66,27 @@ pub(crate) fn init() -> Option<SdkTracerProvider> {
     // Human readable log output to stdout
     let fmt_layer = tracing_subscriber::fmt::layer().compact();
 
-    // try_init does not panic if a subscriber is already set. It also bridges the
-    // old log crate into tracing, so logs from dependencies still using log are captured
-    if std::env::var("OTEL_TRACES_EXPORTER").as_deref() == Ok("stdout") {
-        // The provider owns the export pipeline. The simple exporter writes each
-        // finished span straight to stdout, which is enough for local dev
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(opentelemetry_stdout::SpanExporter::default())
-            .build();
-        let tracer = provider.tracer("brachyura");
+    let exporter = std::env::var("OTEL_TRACES_EXPORTER").ok();
+    let provider = build_provider(exporter.as_deref());
 
-        // The bridge layer turns tracing spans into OpenTelemetry spans
-        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-
+    // Install the subscriber, adding the OTel bridge layer only when exporting.
+    // try_init does not panic if a subscriber is already set, and also bridges the
+    // old log crate into tracing so logs from dependencies using log are captured
+    if let Some(provider) = &provider {
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("brachyura"));
         let _ = tracing_subscriber::registry()
             .with(filter)
             .with(fmt_layer)
             .with(otel_layer)
             .try_init();
-
-        Some(provider)
     } else {
         let _ = tracing_subscriber::registry()
             .with(filter)
             .with(fmt_layer)
             .try_init();
-
-        None
     }
+
+    provider
 }
 
 /// Wraps each request in a span, so log events emitted while handling the
@@ -81,4 +110,41 @@ pub(crate) async fn trace_request(req: Request, next: Next) -> Response {
     response
     // the span closes when its last handle drops at the end of this scope, which
     // is when its end timestamp is recorded, there is no explicit end call
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resource_service_name() {
+        let name = resource()
+            .get(&opentelemetry::Key::new("service.name"))
+            .map(|v| v.as_str().to_string());
+        assert_eq!(name.as_deref(), Some("brachyura"));
+    }
+
+    #[test]
+    fn test_build_provider_disabled() {
+        assert!(build_provider(None).is_none());
+        assert!(build_provider(Some("unknown")).is_none());
+    }
+
+    // stdout and otlp are smoke tests: the provider internals are not inspectable,
+    // so we can only assert a valid exporter name builds a provider without panicking
+    #[test]
+    fn test_build_provider_stdout() {
+        assert!(build_provider(Some("stdout")).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_build_provider_otlp() {
+        // The batch exporter spawns a background task, so it needs a tokio runtime
+        let provider = build_provider(Some("otlp"));
+        assert!(provider.is_some());
+        // Shut down explicitly so the background task stops before the runtime ends
+        if let Some(provider) = provider {
+            let _ = provider.shutdown();
+        }
+    }
 }
