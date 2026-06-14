@@ -177,6 +177,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
@@ -985,6 +986,18 @@ dependencies = [
  "pin-project-lite",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "opentelemetry-http"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5683015d09e2df236ef005b17f6f196f0d5f6313c4fa43a7b6a53b52776e4331"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http",
+ "opentelemetry",
 ]
 
 [[package]]

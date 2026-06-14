@@ -22,11 +22,14 @@ use axum::{
     Router,
 };
 use axum_server::{tls_rustls::RustlsConfig, Handle};
+use opentelemetry::global;
+use opentelemetry_http::HeaderInjector;
 use serde::Deserialize;
 use tokio::signal;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, info, warn};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 mod client;
 mod metrics;
@@ -203,6 +206,14 @@ fn adjust_backend_request_headers(
     let ip_header = HeaderValue::from_str(&client_ip.to_string())
         .expect("IP address is always a valid HeaderValue");
     req.headers_mut().insert("x-forwarded-for", ip_header);
+
+    // Inject the current trace context (traceparent header) so the backend can
+    // continue the trace. A no op when tracing export is off, as there is no
+    // active span context and the global propagator is a no op
+    let context = tracing::Span::current().context();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&context, &mut HeaderInjector(req.headers_mut()));
+    });
 }
 
 fn adjust_backend_response_headers(res: &mut Response<Body>) {

@@ -33,6 +33,8 @@ services:
       - 10000:10000
     environment:
       - PORT=10000
+      - SERVICE_NAME=backend
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
   backend_slow:
     build: ./backend
     container_name: backend_slow
@@ -41,3 +43,5 @@ services:
     environment:
       - PORT=10001
       - SLOW=true
+      - SERVICE_NAME=backend-slow
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317

@@ -99,6 +99,8 @@ The proxy creates a span per request and can export traces via OpenTelemetry. Ex
 
 The OTLP endpoint defaults to `localhost:4317` and can be overridden with the standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable. `./local_run.sh` sets `OTEL_TRACES_EXPORTER=otlp` and runs a Jaeger container, so traces are viewable at `http://localhost:16686`.
 
+The proxy propagates trace context to backends via the W3C `traceparent` header, and the example backends are instrumented with OpenTelemetry. So a single request appears in Jaeger as one distributed trace spanning the proxy and the backend that served it.
+
 ---
 
 ## Testing
