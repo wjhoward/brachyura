@@ -14,7 +14,7 @@
 
 use axum::{extract::Request, middleware::Next, response::Response};
 use opentelemetry::trace::TracerProvider;
-use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
+use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::SdkTracerProvider, Resource};
 use tracing::Instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -73,6 +73,9 @@ pub(crate) fn init() -> Option<SdkTracerProvider> {
     // try_init does not panic if a subscriber is already set, and also bridges the
     // old log crate into tracing so logs from dependencies using log are captured
     if let Some(provider) = &provider {
+        // Propagate trace context to backends via the W3C traceparent header
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
         let otel_layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("brachyura"));
         let _ = tracing_subscriber::registry()
             .with(filter)
