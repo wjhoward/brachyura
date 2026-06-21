@@ -28,7 +28,7 @@ use serde::Deserialize;
 use tokio::signal;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 mod client;
@@ -206,19 +206,21 @@ fn adjust_backend_request_headers(
     let ip_header = HeaderValue::from_str(&client_ip.to_string())
         .expect("IP address is always a valid HeaderValue");
     req.headers_mut().insert("x-forwarded-for", ip_header);
-
-    // Inject the current trace context (traceparent header) so the backend can
-    // continue the trace. A no op when tracing export is off, as there is no
-    // active span context and the global propagator is a no op
-    let context = tracing::Span::current().context();
-    global::get_text_map_propagator(|propagator| {
-        propagator.inject_context(&context, &mut HeaderInjector(req.headers_mut()));
-    });
 }
 
 fn adjust_backend_response_headers(res: &mut Response<Body>) {
     // Remove hop by hop headers from the backend response before returning to the client
     remove_hop_by_hop_headers(res.headers_mut());
+}
+
+// Inject the span's trace context as a traceparent header so the backend can continue
+// the trace. A no op when tracing export is off, as there is no active span context
+// and the global propagator is a no op
+fn inject_trace_context(span: &tracing::Span, headers: &mut HeaderMap) {
+    let context = span.context();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&context, &mut HeaderInjector(headers));
+    });
 }
 
 /// Extracts the virtual hostname from the request for use in backend routing.
@@ -372,7 +374,17 @@ async fn proxy_handler(
 
                     // Downgrade to HTTP/1.1 for backend connections
                     *req.version_mut() = Version::HTTP_11;
-                    let mut response = client.make_request(req).await;
+
+                    // Client span for the outbound call. Inject its context so the
+                    // backend span nests under it, and instrument the call so the
+                    // span times the round trip
+                    let backend_span = tracing::info_span!(
+                        "backend request",
+                        otel.kind = "client",
+                        backend = %backend_location,
+                    );
+                    inject_trace_context(&backend_span, req.headers_mut());
+                    let mut response = client.make_request(req).instrument(backend_span).await;
                     adjust_backend_response_headers(&mut response);
                     debug!(
                         "Proxied response | Status: {} | Headers: {:?}",
