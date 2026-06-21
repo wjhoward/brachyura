@@ -98,6 +98,7 @@ pub(crate) fn init() -> Option<SdkTracerProvider> {
 pub(crate) async fn trace_request(req: Request, next: Next) -> Response {
     let span = tracing::info_span!(
         "request",
+        otel.kind = "server",
         method = %req.method(),
         path = req.uri().path(),
         // declared now but filled in once the response is known
