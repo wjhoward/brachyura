@@ -143,6 +143,7 @@ struct ProxyState {
 #[derive(Debug, Clone)]
 pub(crate) struct ResponseContext {
     backend_location: String,
+    backend_name: String,
 }
 
 fn validate_config(config: &Config) -> Result<()> {
@@ -381,19 +382,29 @@ async fn proxy_handler(
                     let backend_span = tracing::info_span!(
                         "backend request",
                         otel.kind = "client",
+                        otel.status_code = tracing::field::Empty,
                         backend = %backend_location,
                     );
                     inject_trace_context(&backend_span, req.headers_mut());
-                    let mut response = client.make_request(req).instrument(backend_span).await;
+                    let mut response = client
+                        .make_request(req)
+                        .instrument(backend_span.clone())
+                        .await;
+                    // OpenTelemetry convention: a client span is an error on 4xx or 5xx
+                    // (a server span is 5xx only)
+                    if response.status().is_client_error() || response.status().is_server_error() {
+                        backend_span.record("otel.status_code", "error");
+                    }
                     adjust_backend_response_headers(&mut response);
                     debug!(
                         "Proxied response | Status: {} | Headers: {:?}",
                         response.status(),
                         response.headers()
                     );
-                    response
-                        .extensions_mut()
-                        .insert(ResponseContext { backend_location });
+                    response.extensions_mut().insert(ResponseContext {
+                        backend_location,
+                        backend_name: host,
+                    });
                     response
                 }
             }

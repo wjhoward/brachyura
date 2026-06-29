@@ -99,6 +99,8 @@ pub(crate) async fn trace_request(req: Request, next: Next) -> Response {
     let span = tracing::info_span!(
         "request",
         otel.kind = "server",
+        // recorded below as "error" if the response is a 5xx
+        otel.status_code = tracing::field::Empty,
         method = %req.method(),
         path = req.uri().path(),
         // declared now but filled in once the response is known
@@ -110,6 +112,10 @@ pub(crate) async fn trace_request(req: Request, next: Next) -> Response {
     let response = next.run(req).instrument(span.clone()).await;
 
     span.record("status", response.status().as_str());
+    // a server span is an error only on 5xx, everything else (including 4xx) stays unset
+    if response.status().is_server_error() {
+        span.record("otel.status_code", "error");
+    }
 
     response
     // the span closes when its last handle drops at the end of this scope, which
